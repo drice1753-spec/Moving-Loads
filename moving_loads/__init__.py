@@ -14,6 +14,11 @@ from moving_loads.analysis import (
     moving_load_envelope,
     critical_positions,
 )
+from moving_loads.freight_calculator import (
+    FreightResult,
+    calculate_freight,
+    get_road_distance,
+)
 
 __version__ = "0.1.0"
 
@@ -28,4 +33,7 @@ __all__ = [
     "influence_line_moment",
     "moving_load_envelope",
     "critical_positions",
+    "FreightResult",
+    "calculate_freight",
+    "get_road_distance",
 ]
