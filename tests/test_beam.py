@@ -52,6 +52,51 @@ class TestBeamReactions:
         assert ra + rb == pytest.approx(load_mag)
 
 
+class TestBeamValidation:
+    """Tests for Beam parameter validation."""
+
+    def test_negative_E_raises(self):
+        with pytest.raises(ValueError, match="Modulus of elasticity must be positive"):
+            Beam(length=10.0, E=-1.0)
+
+    def test_zero_E_raises(self):
+        with pytest.raises(ValueError, match="Modulus of elasticity must be positive"):
+            Beam(length=10.0, E=0.0)
+
+    def test_negative_I_raises(self):
+        with pytest.raises(ValueError, match="Second moment of area must be positive"):
+            Beam(length=10.0, I=-1e-4)
+
+    def test_zero_I_raises(self):
+        with pytest.raises(ValueError, match="Second moment of area must be positive"):
+            Beam(length=10.0, I=0.0)
+
+    def test_stiffness_property(self):
+        beam = Beam(length=10.0, E=200e9, I=1e-4)
+        assert beam.stiffness == pytest.approx(200e9 * 1e-4)
+
+    def test_max_moment_position(self):
+        beam = Beam(length=10.0)
+        assert beam.max_moment_position() == pytest.approx(5.0)
+
+    def test_reaction_out_of_range_raises(self):
+        beam = Beam(length=10.0)
+        with pytest.raises(ValueError, match="within beam span"):
+            beam.reaction_a(-1.0, 100.0)
+        with pytest.raises(ValueError, match="within beam span"):
+            beam.reaction_b(11.0, 100.0)
+
+    def test_shear_out_of_range_raises(self):
+        beam = Beam(length=10.0)
+        with pytest.raises(ValueError, match="within beam span"):
+            beam.shear(-1.0, 5.0, 100.0)
+
+    def test_moment_out_of_range_raises(self):
+        beam = Beam(length=10.0)
+        with pytest.raises(ValueError, match="within beam span"):
+            beam.moment(11.0, 5.0, 100.0)
+
+
 class TestBeamShear:
     """Tests for shear force calculations."""
 
@@ -81,6 +126,32 @@ class TestBeamMoment:
         assert beam.moment(10.0, 5.0, 100.0) == pytest.approx(0.0)
 
 
+class TestBeamDeflection:
+    """Tests for Beam deflection calculations."""
+
+    def test_deflection_at_midspan_known_formula(self):
+        beam = Beam(length=10.0, E=200e9, I=1e-4)
+        # PL^3 / (48EI) for midspan load at midspan
+        expected = 100.0 * 10.0**3 / (48 * 200e9 * 1e-4)
+        assert beam.deflection(5.0, 5.0, 100.0) == pytest.approx(expected, rel=1e-6)
+
+    def test_deflection_zero_at_supports(self):
+        beam = Beam(length=10.0)
+        assert beam.deflection(0.0, 5.0, 100.0) == pytest.approx(0.0, abs=1e-10)
+        assert beam.deflection(10.0, 5.0, 100.0) == pytest.approx(0.0, abs=1e-10)
+
+    def test_deflection_asymmetric_load(self):
+        beam = Beam(length=10.0)
+        # Load at quarter point — deflection should be positive (downward) at midspan
+        d = beam.deflection(5.0, 2.5, 100.0)
+        assert d > 0
+
+    def test_deflection_out_of_range_raises(self):
+        beam = Beam(length=10.0)
+        with pytest.raises(ValueError, match="within beam span"):
+            beam.deflection(-1.0, 5.0, 100.0)
+
+
 class TestContinuousBeam:
     """Tests for ContinuousBeam."""
 
@@ -96,6 +167,38 @@ class TestContinuousBeam:
         with pytest.raises(ValueError):
             ContinuousBeam(spans=[])
 
+    def test_negative_span_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            ContinuousBeam(spans=[10.0, -5.0])
+
     def test_support_positions(self):
         cb = ContinuousBeam(spans=[10.0, 15.0])
         assert cb.support_positions == pytest.approx([0.0, 10.0, 25.0])
+
+    def test_span_index_first_span(self):
+        cb = ContinuousBeam(spans=[10.0, 15.0, 10.0])
+        assert cb.span_index(5.0) == 0
+
+    def test_span_index_second_span(self):
+        cb = ContinuousBeam(spans=[10.0, 15.0, 10.0])
+        assert cb.span_index(15.0) == 1
+
+    def test_span_index_last_span(self):
+        cb = ContinuousBeam(spans=[10.0, 15.0, 10.0])
+        assert cb.span_index(30.0) == 2
+
+    def test_span_index_at_boundary(self):
+        cb = ContinuousBeam(spans=[10.0, 10.0])
+        assert cb.span_index(10.0) == 0  # On boundary, belongs to first span
+
+    def test_span_index_out_of_range_raises(self):
+        cb = ContinuousBeam(spans=[10.0, 10.0])
+        with pytest.raises(ValueError, match="outside the beam"):
+            cb.span_index(-1.0)
+        with pytest.raises(ValueError, match="outside the beam"):
+            cb.span_index(25.0)
+
+    def test_three_moment_equation_returns_correct_count(self):
+        cb = ContinuousBeam(spans=[10.0, 12.0, 10.0])
+        moments = cb.three_moment_equation()
+        assert len(moments) == 4  # num_spans + 1
