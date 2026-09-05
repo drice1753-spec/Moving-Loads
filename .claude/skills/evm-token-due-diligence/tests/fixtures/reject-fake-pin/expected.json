@@ -1,0 +1,37 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-CHAIN-MISMATCH",
+    "E-CHAIN-UNPINNED",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-TARGET",
+    "E-SCOPE-RUNTIME",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT",
+    "E-REPORT-SECTIONS",
+    "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS",
+    "E-EVIDENCE-DANGLING",
+    "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-CHAIN",
+    "E-RATING-MISSING",
+    "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-DECL-FORK",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "Primary pin has an all-zero block hash and a captured header whose number disagrees with block_number; the report frontmatter was updated to the same zero hash so only pin errors trigger."
+}

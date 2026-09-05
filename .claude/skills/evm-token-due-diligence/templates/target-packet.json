@@ -1,0 +1,202 @@
+{
+  "_comment": "Target packet skeleton for evm-token-due-diligence. scripts/rpc_probe.py writes the machine-filled fields (tool, generated_at_utc, requested, observed, identity, pin, pinned_block_hex, runtime, metadata, probes, coverage_status, limitations, calls, failed_calls, declarations, notes). You fill deployment, candidate_pools, related_contracts, decision_question, requirement_frame, scope_statement, known_limitations, and _freeze. Keys starting with '_' are documentation: drop them, and drop keys the manifest schema does not allow (runtime.is_contract, runtime.proxy.implementation_code_size, metadata.*.selector, metadata.*.raw), when copying objects into a manifest. Chain ids and every other chain-specific number are as observed from the endpoint and must be verified at use time (eth_chainId at the pin).",
+  "packet_version": "1.0",
+  "tool": {
+    "name": "rpc_probe.py",
+    "version": "1.0",
+    "library": "ddcore"
+  },
+  "generated_at_utc": null,
+  "_comment_generated_at_utc": "UTC time the probe ran, YYYY-MM-DDTHH:MM:SSZ.",
+  "requested": {
+    "_comment": "Exactly what the user asked for. chain_id (integer) is authoritative; chain_name is a label only. address is as supplied (strict: mixed case must satisfy EIP-55); address_checksum is the EIP-55 form used everywhere else. source = where the address came from (message, file, link).",
+    "chain_id": null,
+    "chain_name": null,
+    "address": null,
+    "address_checksum": null,
+    "source": null
+  },
+  "observed": {
+    "_comment": "What the endpoint reported. chain_id = int(eth_chainId), read live, never from cache. rpc_endpoint_redacted comes from ddcore.redact_url; never store the raw URL. client_version = web3_clientVersion when available (non-material).",
+    "chain_id": null,
+    "rpc_chain_id_hex": null,
+    "rpc_endpoint_redacted": null,
+    "client_version": null
+  },
+  "identity": {
+    "_comment": "MATCH when requested.chain_id == observed.chain_id. CHAIN_MISMATCH means stop and report (rpc_probe exits 3 and reads nothing else). UNVERIFIED means the chain id could not be read (coverage limitation; nothing can be pinned). pin_warning appears when the block hash looks like a placeholder.",
+    "status": "UNVERIFIED",
+    "detail": null
+  },
+  "pin": {
+    "_comment": "Primary pin P1 in manifest pin format. block_number, block_hash and timestamp_unix are copied from captured_header, the raw eth_getBlockByNumber result. Every later read uses pinned_block_hex, never 'latest'. Additional chains and historical snapshots get P2..Pn in the manifest, never a replaced P1.",
+    "pin_id": "P1",
+    "chain_id": null,
+    "block_number": null,
+    "block_hash": null,
+    "timestamp_unix": null,
+    "timestamp_utc": null,
+    "captured_at_utc": null,
+    "rpc_method": "eth_getBlockByNumber",
+    "rpc_endpoint_redacted": null,
+    "captured_header": null,
+    "purpose": "current_state"
+  },
+  "pinned_block_hex": null,
+  "_comment_pinned_block_hex": "Hex block number (0x..) passed to every pinned read.",
+  "runtime": {
+    "_comment": "Target runtime at P1. code_hash = keccak256(eth_getCode) (0x + 64 hex); is_contract false with the empty-code hash means the address has no code. proxy.status: not_proxy | eip1967 | eip1822 | beacon | minimal_1167 | custom | unknown. slots_read maps slot -> raw 32-byte value. upgrade_authority stays null until resolved under A-UPGRADE (address + role + threshold/timelock).",
+    "code_hash": null,
+    "code_size": null,
+    "is_contract": null,
+    "pin_id": "P1",
+    "proxy": {
+      "status": "unknown",
+      "implementation": null,
+      "implementation_code_hash": null,
+      "implementation_code_size": null,
+      "admin": null,
+      "beacon": null,
+      "upgrade_authority": null,
+      "slots_read": {},
+      "basis": null
+    }
+  },
+  "metadata": {
+    "_comment": "Resolved from the target with eth_call at P1. status: resolved | nonstandard (value kept, decoding basis in reason) | unresolved (value null, reason required). source names the call and pin; selector and raw preserve the request and raw return data (move raw into an evidence row and cite it via evidence_id when building the manifest). accounting_model is yours to fill from code and behavior: standard_erc20 | rebasing | fee_on_transfer | shares_based | wrapper | unknown.",
+    "name": {
+      "value": null,
+      "status": "unresolved",
+      "source": "eth_call name() (0x06fdde03) at P1",
+      "reason": null,
+      "selector": "0x06fdde03",
+      "raw": null
+    },
+    "symbol": {
+      "value": null,
+      "status": "unresolved",
+      "source": "eth_call symbol() (0x95d89b41) at P1",
+      "reason": null,
+      "selector": "0x95d89b41",
+      "raw": null
+    },
+    "decimals": {
+      "value": null,
+      "status": "unresolved",
+      "source": "eth_call decimals() (0x313ce567) at P1",
+      "reason": null,
+      "selector": "0x313ce567",
+      "raw": null
+    },
+    "total_supply": {
+      "value": null,
+      "status": "unresolved",
+      "source": "eth_call totalSupply() (0x18160ddd) at P1",
+      "reason": null,
+      "selector": "0x18160ddd",
+      "raw": null
+    },
+    "accounting_model": null
+  },
+  "probes": [],
+  "_comment_probes": "Standard probes owner(), getOwner(), paused() plus each --call (a --call repeating a standard probe is read once). Element shape in _element_shapes.probe. status: ok | reverted | unavailable | empty. A revert is a fact about the contract at P1, not a limitation; unavailable means the read failed and a limitation was recorded.",
+  "deployment": {
+    "_comment": "Not derivable from standard JSON-RPC reads. Discover via explorer/trace tooling, then verify by receipt (contractAddress == target) and record provenance; until then status stays unresolved with the reason. deterministic = true when created via CREATE2/factory with a derivable address.",
+    "status": "unresolved",
+    "tx_hash": null,
+    "block_number": null,
+    "deployer": null,
+    "factory": null,
+    "deterministic": null,
+    "reason": "deployment transaction is not derivable from standard JSON-RPC reads; discover it via explorer/trace tooling, then verify by receipt (contractAddress) and record provenance"
+  },
+  "candidate_pools": [],
+  "_comment_candidate_pools": "Pools from the architecture pass, each by exact address (v2/v3) or full pool key + derived PoolId (v4). Element shape in _element_shapes.candidate_pool. Canonical vs side is decided under B-CANON/B-SIDE, not here.",
+  "related_contracts": [],
+  "_comment_related_contracts": "Every contract or key that can change balances, restrict transfers, remove principal, upgrade behavior, collect fees, allocate rewards, or enforce claimed utility. Element shape = manifest scope_addresses entry (see _element_shapes.related_contract) so it can be copied unchanged.",
+  "decision_question": null,
+  "_comment_decision_question": "The user's actual question, verbatim.",
+  "requirement_frame": null,
+  "_comment_requirement_frame": "The standard the verdict is judged against, e.g. 'rug resistance for a 30-day hold' or 'exit of 0.5% of supply within 5% degradation'.",
+  "scope_statement": null,
+  "_comment_scope_statement": "What is in and out of scope (chains, pools, reward layers, time bounds).",
+  "materiality_rules": "Monetary thresholds never apply to discovery of mint, upgrade, seizure, transfer-restriction, arbitrary-call, or LP-removal authority.",
+  "known_limitations": [],
+  "_comment_known_limitations": "Free-text limitations known before starting (no archive endpoint, no explorer API, no parallel agents).",
+  "coverage_status": "partial",
+  "_comment_coverage_status": "complete when limitations is empty, otherwise partial.",
+  "limitations": [],
+  "_comment_limitations": "Manifest-shaped coverage limitations L1..Ln (see _element_shapes.limitation). Never token findings.",
+  "calls": [],
+  "_comment_calls": "Every successful RPC call {method, params, cached} for replay.",
+  "failed_calls": [],
+  "_comment_failed_calls": "Every failed call {method, params, cached, outcome (reverted|limitation), error_kind, error_message, limitation_id}.",
+  "declarations": {
+    "no_real_signing": true,
+    "no_broadcast": true,
+    "no_private_keys_requested": true,
+    "read_only_methods_only": true
+  },
+  "notes": [],
+  "_freeze": {
+    "_comment": "Filled when the packet is frozen: sha256 of this file computed with the three values below set to null; frozen_at_utc; frozen_by (agent/session label, no personal data). After freezing, the packet is read-only; a new target or pin means a new packet.",
+    "sha256": null,
+    "frozen_at_utc": null,
+    "frozen_by": null
+  },
+  "_element_shapes": {
+    "probe": {
+      "name": "owner()",
+      "selector": "0x8da5cb5b",
+      "calldata": "0x8da5cb5b",
+      "raw": null,
+      "decoded_candidates": {
+        "uint": null,
+        "address": null,
+        "bool": null,
+        "string": null
+      },
+      "status": null,
+      "detail": null
+    },
+    "candidate_pool": {
+      "platform": "uniswap_v2 | uniswap_v3 | uniswap_v4 | curve_launchpad | other",
+      "chain_id": null,
+      "address": null,
+      "pool_key": {
+        "currency0": null,
+        "currency1": null,
+        "fee": null,
+        "tick_spacing": null,
+        "hooks": null
+      },
+      "pool_id": null,
+      "quote_asset": null,
+      "provenance": "event_derived | rpc_derived | explorer_label | website_claim | inferred | user_supplied",
+      "provenance_detail": "e.g. PoolCreated log tx 0x.. block N; verify factory and init code hash at use time",
+      "discovery_id": null,
+      "pin_id": "P1"
+    },
+    "related_contract": {
+      "address": null,
+      "chain_id": null,
+      "role": "token | implementation | proxy_admin | beacon | owner | role_holder | multisig | timelock | pool | pool_manager | position_manager | position_nft | locker | hook | router | quoter | factory | launch_platform | curve | treasury | fee_recipient | vault | reward_distributor | bridge | oracle | deployer | launch_signer | funder | holder | burn | exchange_deposit | other",
+      "label": null,
+      "provenance": "user_supplied | rpc_derived | event_derived | explorer_label | website_claim | inferred",
+      "provenance_detail": null,
+      "runtime_status": "contract | eoa | unknown",
+      "code_hash": null,
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    "limitation": {
+      "limitation_id": "L1",
+      "kind": "rpc_timeout | rpc_rate_limit | rpc_pruned | rpc_error | dns_failure | api_unavailable | explorer_unavailable | source_unavailable | out_of_scope | other",
+      "description": "step and failure, endpoint redacted",
+      "affected_check_ids": [],
+      "affected_addresses": [],
+      "retry_attempts": null
+    }
+  }
+}

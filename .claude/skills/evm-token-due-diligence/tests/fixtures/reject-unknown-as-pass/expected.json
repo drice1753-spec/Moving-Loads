@@ -1,0 +1,37 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-CHECK-STATUS",
+    "E-RATING-UNKNOWN-AS-LOW"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-CHAIN-MISMATCH",
+    "E-CHAIN-UNPINNED",
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-TARGET",
+    "E-SCOPE-RUNTIME",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT",
+    "E-REPORT-SECTIONS",
+    "E-CHECK-CORE-MISSING",
+    "E-EVIDENCE-DANGLING",
+    "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-CHAIN",
+    "E-RATING-MISSING",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-DECL-FORK",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "C-HIST-SELL presented as pass with no evidence and reason 'not run'; sellability rated low over an unknown C-QUOTE without coverage qualification. L1 still lists C-HIST-SELL in affected_check_ids, so no limitation warning is expected."
+}

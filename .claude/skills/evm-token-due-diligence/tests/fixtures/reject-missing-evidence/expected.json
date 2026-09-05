@@ -1,0 +1,37 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-FINDING-NO-EVIDENCE",
+    "E-EVIDENCE-DANGLING"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-CHAIN-MISMATCH",
+    "E-CHAIN-UNPINNED",
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-TARGET",
+    "E-SCOPE-RUNTIME",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT",
+    "E-REPORT-SECTIONS",
+    "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS",
+    "E-FINDING-CHAIN",
+    "E-RATING-MISSING",
+    "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-DECL-FORK",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "F1 keeps confidence proven with no evidence ids; A-UPGRADE cites a non-existent evidence id E999."
+}

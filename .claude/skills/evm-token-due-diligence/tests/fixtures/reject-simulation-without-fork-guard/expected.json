@@ -1,0 +1,37 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-DECL-FORK"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-CHAIN-MISMATCH",
+    "E-CHAIN-UNPINNED",
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-TARGET",
+    "E-SCOPE-RUNTIME",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT",
+    "E-REPORT-SECTIONS",
+    "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS",
+    "E-EVIDENCE-DANGLING",
+    "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-CHAIN",
+    "E-RATING-MISSING",
+    "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "simulation.used is true and simulation_counterfactual evidence exists, but fork_verified_disposable is false (fork_guard.py attestation absent)."
+}

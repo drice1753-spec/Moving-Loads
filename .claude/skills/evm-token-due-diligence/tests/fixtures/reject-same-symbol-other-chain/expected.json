@@ -1,0 +1,36 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-CHAIN-MISMATCH",
+    "E-SCOPE-TARGET"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-RUNTIME",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT",
+    "E-REPORT-SECTIONS",
+    "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS",
+    "E-EVIDENCE-DANGLING",
+    "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-CHAIN",
+    "E-RATING-MISSING",
+    "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-DECL-FORK",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "Same-symbol token substituted from chain 1: requested 8453 but RPC observed 0x1 and the scoped token entry is on chain 1. E-CHAIN-UNPINNED is an unavoidable side effect (chain 1 has no pin)."
+}
