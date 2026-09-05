@@ -207,13 +207,13 @@ Check rows:
 
 Finding row:
 ```json
-{ "finding_id": "F17", "surface": "token_controls", "severity": "high",
+{ "finding_id": "F17", "surface": "current_concentration", "severity": "high",
   "proposition": "At tx <tx hash> the balance of <addr> on chain <chain_id> changed by <int> base units with no Transfer log; the change was executed through a call from <caller> to selector <0x…>.",
   "chain_id": <chain_id>, "address": "<token>", "pin_or_tx": "<tx hash>",
   "evidence_ids": ["E43", "E41"], "evidence_type": "trace", "confidence": "proven",
   "alternatives": "A nonstandard event we did not filter for could describe the same change; checked receipt logs: none from the token.",
   "coverage": "single transaction; other such calls enumerated in S3 window list",
-  "stale_conditions": "none for the historical fact; the authority behind the path is rated under A-SEIZE at P1",
+  "stale_conditions": "none for the historical fact; the authority behind the path is a separate token_controls finding under A-SEIZE at P1",
   "is_historical": true }
 ```
 

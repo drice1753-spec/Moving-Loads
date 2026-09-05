@@ -10,7 +10,9 @@ Usage:
   python3 <skill-root>/scripts/selector_scan.py --code 0x... [--json]
   python3 <skill-root>/scripts/selector_scan.py --code-file F [--json]
         F may hold a hex string (with or without 0x), a JSON-RPC eth_getCode response
-        ({"result": "0x..."}), or raw binary bytes.
+        ({"result": "0x..."}), or raw binary bytes. Only a literal "0x" is empty code: a JSON-RPC
+        error response, a null/missing result, or an empty file exits 2 ("no runtime code in
+        response"), because a failed read is a coverage limitation, not an EOA.
 
 What it does:
   * walks opcodes correctly (PUSH1..PUSH32 = 0x60..0x7f skip their immediates, so data bytes are never
@@ -199,20 +201,41 @@ CAVEATS = [
 # Input parsing
 # --------------------------------------------------------------------------------------
 def parse_code(text: str) -> bytes:
-    """Parse a hex string (0x-prefixed or not, whitespace tolerated) or a JSON-RPC eth_getCode response."""
+    """Parse a hex string (0x-prefixed or not, whitespace tolerated) or a JSON-RPC eth_getCode response.
+
+    Only the literal string "0x" means empty code. A JSON-RPC error response, a null/missing result, or an
+    empty input is a failed read (a coverage limitation), never evidence that the address has no code."""
     s = text.strip()
     if s.startswith("{"):
         obj = json.loads(s)
-        if isinstance(obj, dict):
-            s = obj.get("result") or obj.get("code") or obj.get("bytecode") or ""
-            if isinstance(s, dict):  # some tools nest {"object": "..."}
-                s = s.get("object", "")
-            s = str(s).strip()
+        if not isinstance(obj, dict):
+            raise ValueError("JSON input is not an object")
+        if obj.get("error"):
+            err = obj["error"]
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            raise ValueError(f"no runtime code in response: the JSON-RPC response carries an error ({msg}); "
+                             "a failed eth_getCode is a coverage limitation, not empty code")
+        val: object = None
+        for key in ("result", "code", "bytecode"):
+            if key in obj:
+                val = obj[key]
+                break
+        if isinstance(val, dict):  # some tools nest {"object": "..."}
+            val = val.get("object")
+        if val is None:
+            raise ValueError("no runtime code in response: the JSON has a null or missing result/code/bytecode "
+                             "(only a literal \"0x\" result means empty code)")
+        if not isinstance(val, str):
+            raise ValueError(f"no runtime code in response: result is {type(val).__name__}, not a hex string")
+        s = val.strip()
     s = "".join(s.split())
+    if s in ("0x", "0X"):
+        return b""
+    if s == "":
+        raise ValueError("no bytecode given: an address without code returns the literal string 0x; "
+                         "an empty input is a failed read, not empty code")
     if s.startswith(("0x", "0X")):
         s = s[2:]
-    if s == "":
-        return b""
     if len(s) % 2:
         raise ValueError("hex string has odd length")
     try:

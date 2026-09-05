@@ -1,7 +1,7 @@
 # Surface B - Liquidity custody
 
 Rating keys: `canonical_lp_principal_custody` (checks `B-CANON`, `B-PRINCIPAL`) and
-`side_pool_removal_risk` (check `B-SIDE`). Read this file for "is liquidity locked", LP owner, locker,
+`side_pool_removal_risk` (check `B-SIDE`); the checks table states which key each sub-check feeds. Read this file for "is liquidity locked", LP owner, locker,
 position NFT, hook, or side-pool questions; always in `broad` mode. Platform mechanics beyond what is
 here: `references/platforms/uniswap-v3.md`, `references/platforms/uniswap-v4.md`,
 `references/platforms/pons-style-launches.md`.
@@ -111,7 +111,7 @@ roles `position_manager`, `position_nft`, `locker`, `hook`; discovery claims get
      `setMigrator`/`migrate`, upgrade (proxy slots), and `selfdestruct` presence:
      ```
      python3 <skill-root>/scripts/selector_scan.py --code-file evidence/E9-locker-code.hex --json
-     python3 <skill-root>/scripts/rpc_probe.py --address 0x<locker> --chain-id N --block <P1 block> --call "owner()" --call "getLock(uint256):<id>" --out packet-B-locker.json
+     python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<locker> --chain-id N --block <P1 block> --call "owner()" --call "getLock(uint256):<id>" --out packet-B-locker.json
      ```
    - the locker's own proxy status (an upgradeable locker is custody by its admin);
    - who can call each path today; a locker with an EOA admin and a `rescue` path is not custody.
@@ -123,9 +123,12 @@ roles `position_manager`, `position_nft`, `locker`, `hook`; discovery claims get
    direction; liquidity out of range provides no exit depth in that direction; per-position tick range
    matters more than the sum of liquidity. Hand pool addresses, keys and range facts to surface C.
 10. Side pools (`B-SIDE`): inventory every discovered non-canonical pool with its reserves or liquidity
-    at P1, LP/position holders and their removal paths (steps 4-8, abbreviated where depth is immaterial
-    under the stated materiality rule), and rate removal risk separately. A side pool whose liquidity can
-    be pulled in one transaction is the removal risk even when the canonical position is locked.
+    at P1, then for EVERY side pool resolve the LP/position holders and their removal paths (steps 4-8)
+    regardless of size: discovery of LP-removal authority carries no monetary threshold. Only the
+    depth/quote analysis (step 9 and surface C) may be abbreviated under the stated materiality rule,
+    and the abbreviation must be declared in the B-SIDE row. Rate removal risk separately: a side pool
+    whose liquidity can be pulled in one transaction is the removal risk even when the canonical
+    position is locked.
 
 ### Verify-at-use table (never assert from memory)
 
@@ -140,17 +143,17 @@ roles `position_manager`, `position_nft`, `locker`, `hook`; discovery claims get
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| B-CANON | Each canonical pool is identified by exact address (v2/v3) or complete pool key + derived PoolId (v4), with the classification basis | creation log + `token0/token1/fee` or `Initialize` decode + PoolId match + volume basis | `log_decoded`, `rpc_state` | new canonical pool created; platform migration |
-| B-PRINCIPAL | The executable LP-principal removal path(s) for the canonical position(s) and the key(s) that can run them at P1 | LP holders / NFT owner + approvals + operators + locker admin surface + unlock time | `rpc_state`, `bytecode`, `log_decoded` | LP/NFT `Transfer`, `Approval`, `ApprovalForAll`, lock transfer/extension, unlock time reached, locker upgrade |
-| B-SIDE | Every side pool in the declared universe is inventoried with depth and removal risk | discovery row + per-pool reserves/liquidity at P1 + holder resolution | `log_decoded`, `rpc_state` | new pool created; liquidity added/removed |
-| B-LOCKER-AUTH | The locker/vault holding LP or a position NFT has no admin path (withdraw, rescue, transfer, arbitrary call, upgrade, shorten) executable before unlock | selector scan + owner/roles + lock record + proxy slots | `bytecode`, `rpc_state`, `rpc_storage` | locker ownership change, upgrade, lock record change |
-| B-OPERATOR-APPROVALS | No address other than the resolved custodian is approved or an operator for the canonical position | `getApproved` + `isApprovedForAll` for each observed operator at P1 | `rpc_state`, `log_decoded` | `Approval`/`ApprovalForAll` after P1 |
-| B-HOOK-AUTH | (v4) The hook's permissions and its owner/upgradeability cannot block or reroute liquidity actions on the canonical pool | permission bits decoded + hook owner/proxy reads | `bytecode`, `rpc_state`, `rpc_storage` | hook upgrade, hook ownership change |
-| B-RANGE | Canonical position(s) are in range at P1 and the tick range is stated per position | `slot0`/`getSlot0` + `positions` decode | `rpc_state` | any price move across a tick boundary |
-| B-DIRECT-MINT | Liquidity minted directly on the pool (not via the NFT manager) is enumerated with its owner | pool `Mint` logs with non-manager owners + `positions(key)` on the pool | `log_decoded`, `rpc_state` | new `Mint`/`Burn` on the pool |
-| B-DISCOVERY-COVERAGE | The declared universe was actually searched end-to-end | discovery row with ranges, pagination, and the limitation ids for gaps | `log_decoded`, `manual_note` | new factories/DEXes deployed; block range advances |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| B-CANON | canonical_lp_principal_custody | Each canonical pool is identified by exact address (v2/v3) or complete pool key + derived PoolId (v4), with the classification basis | creation log + `token0/token1/fee` or `Initialize` decode + PoolId match + volume basis | `log_decoded`, `rpc_state` | new canonical pool created; platform migration |
+| B-PRINCIPAL | canonical_lp_principal_custody | The executable LP-principal removal path(s) for the canonical position(s) and the key(s) that can run them at P1 | LP holders / NFT owner + approvals + operators + locker admin surface + unlock time | `rpc_state`, `bytecode`, `log_decoded` | LP/NFT `Transfer`, `Approval`, `ApprovalForAll`, lock transfer/extension, unlock time reached, locker upgrade |
+| B-SIDE | side_pool_removal_risk | Every side pool in the declared universe is inventoried with depth and removal risk | discovery row + per-pool reserves/liquidity at P1 + holder resolution | `log_decoded`, `rpc_state` | new pool created; liquidity added/removed |
+| B-LOCKER-AUTH | canonical_lp_principal_custody | The locker/vault holding LP or a position NFT has no admin path (withdraw, rescue, transfer, arbitrary call, upgrade, shorten) executable before unlock | selector scan + owner/roles + lock record + proxy slots | `bytecode`, `rpc_state`, `rpc_storage` | locker ownership change, upgrade, lock record change |
+| B-OPERATOR-APPROVALS | canonical_lp_principal_custody | No address other than the resolved custodian is approved or an operator for the canonical position | `getApproved` + `isApprovedForAll` for each observed operator at P1 | `rpc_state`, `log_decoded` | `Approval`/`ApprovalForAll` after P1 |
+| B-HOOK-AUTH | canonical_lp_principal_custody | (v4) The hook's permissions and its owner/upgradeability cannot block or reroute liquidity actions on the canonical pool | permission bits decoded + hook owner/proxy reads | `bytecode`, `rpc_state`, `rpc_storage` | hook upgrade, hook ownership change |
+| B-RANGE | canonical_lp_principal_custody | Canonical position(s) are in range at P1 and the tick range is stated per position | `slot0`/`getSlot0` + `positions` decode | `rpc_state` | any price move across a tick boundary |
+| B-DIRECT-MINT | canonical_lp_principal_custody | Liquidity minted directly on the pool (not via the NFT manager) is enumerated with its owner | pool `Mint` logs with non-manager owners + `positions(key)` on the pool | `log_decoded`, `rpc_state` | new `Mint`/`Burn` on the pool |
+| B-DISCOVERY-COVERAGE | side_pool_removal_risk | The declared universe was actually searched end-to-end | discovery row with ranges, pagination, and the limitation ids for gaps | `log_decoded`, `manual_note` | new factories/DEXes deployed; block range advances |
 
 ## Common false positives and negatives
 

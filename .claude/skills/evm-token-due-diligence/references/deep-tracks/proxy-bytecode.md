@@ -9,8 +9,11 @@ most questions close at rung 1 or 2.
 
 ## Trigger
 
-- `rpc_probe.py` reports a non-empty EIP-1967/EIP-1822/beacon slot, an EIP-1167 minimal proxy, or
-  `DELEGATECALL` in a contract that is not a recognized proxy (`custom`).
+- `rpc_probe.py` reports `runtime.proxy.status` other than `not_proxy`: `eip1967`, `eip1822` or `beacon`
+  (a non-empty slot), `minimal_1167` (EIP-1167 minimal proxy), or `unknown` (a slot read failed; a
+  limitation, not a clean result) - OR `scripts/selector_scan.py` flags `DELEGATECALL` in a contract whose
+  probe status is `not_proxy`. The probe never inspects opcodes and never emits `custom`; set
+  `proxy.status: custom` in the packet yourself in that case.
 - Source is unverified, or verified source does not match the runtime code hash, for any material contract
   (token, implementation, admin, locker, curve, distributor, vault).
 - `scripts/selector_scan.py` flags risky selectors or opcodes without a source explanation.
@@ -21,7 +24,7 @@ most questions close at rung 1 or 2.
 
 | Item | Source | Why |
 |---|---|---|
-| Runtime bytecode and `code_hash` at `P1` for the proxy and every resolved implementation/beacon/admin | `eth_getCode` at the pin; `scripts/rpc_probe.py --address … --block <P1>` | every statement below is about specific bytes at a specific block |
+| Runtime bytecode and `code_hash` at `P1` for the proxy and every resolved implementation/beacon/admin | `eth_getCode` at the pin; `scripts/rpc_probe.py --rpc URL --address … --chain-id N --block <P1 block>` | every statement below is about specific bytes at a specific block |
 | Proxy slot reads at `P1` | `rpc_probe.py` (EIP-1967 implementation/admin/beacon, EIP-1822 logic) | who executes, who can change it |
 | Selector and opcode inventory | `python3 <skill-root>/scripts/selector_scan.py --code-file runtime.hex --json` | the cheapest map of what can be called |
 | For rung 2: candidate source (explorer-verified or repository) with declared compiler version and settings | explorer / repository (`explorer`, `repository` evidence — untrusted until byte-compared) | correspondence must be established, not assumed |
@@ -46,8 +49,9 @@ Verify-at-use table (protocol-standard signatures recomputed with ddcore; confir
 
 Rung 1 — runtime, selectors, slots (always).
 1. Read the proxy's code and the four standard slots at `P1`; resolve implementation, admin, beacon (and the
-   beacon's `implementation()`), and record each with its own `code_hash`. If none is set but the code contains
-   `DELEGATECALL`, mark `proxy.status: custom` and search the runtime for `PUSH32` constants that look like
+   beacon's `implementation()`), and record each with its own `code_hash`. If no slot is set (probe status
+   `not_proxy`) but `selector_scan.py` reports `DELEGATECALL`, mark `proxy.status: custom` yourself and search
+   the runtime for `PUSH32` constants that look like
    storage slots; read each candidate with `eth_getStorageAt` at `P1` and treat a value that decodes to a
    contract address as a candidate implementation.
 2. Run `selector_scan.py` on the proxy code **and** on each implementation. Classify hits: upgrade, admin change,
@@ -159,9 +163,9 @@ Evidence rows:
   "summary": "<n> upgrades; latest at block <b> by <caller>; initializer ran in <k> of them" }
 
 { "evidence_id": "E84", "chain_id": <chain_id>, "address": "<proxy>", "pin_id": "P1", "tx_hash": null,
-  "block_number": <fork_block>, "evidence_type": "simulation_counterfactual", "counterfactual": true,
+  "block_number": <P1.block_number>, "evidence_type": "simulation_counterfactual", "counterfactual": true,
   "artifact": "artifacts/sim-upgrade.json", "artifact_sha256": "<sha256>",
-  "query": {"fork_attestation": "attestation.json", "call": {"from": "<resolved admin, impersonated>", "to": "<proxy>", "data": "0x3659cfe6<synthetic impl>"}, "reads_after": ["EIP1967 impl slot"]},
+  "query": {"fork_attestation": "attestation.json", "fork_block": <fork_block>, "call": {"from": "<resolved admin, impersonated>", "to": "<proxy>", "data": "0x3659cfe6<synthetic impl>"}, "reads_after": ["EIP1967 impl slot"]},
   "decoding_basis": "state override on eth_call; slot read after call",
   "summary": "COUNTERFACTUAL: upgrade from <admin> succeeds on the fork at block <fork_block>; slot changed" }
 ```

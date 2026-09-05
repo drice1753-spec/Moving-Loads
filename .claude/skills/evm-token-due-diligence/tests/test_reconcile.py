@@ -173,6 +173,32 @@ class GasTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("gas cannot be paid", err)
 
+    def test_reverted_gas_row_is_excluded_with_a_loud_warning(self):
+        # gas is spent even when a transaction reverts: a gas row marked reverted is the usual mistake
+        flows = base_flows(is_native=True)
+        flows["opening"]["balance"] = "1000000"
+        flows["rows"] = [{"tx": TX5, "status": "reverted", "direction": "gas", "amount": "21000", "block": 190,
+                          "counterparty": None, "note": "gas of a reverted swap"}]
+        flows["closing"]["balance"] = str(1000000 - 21000)
+        res = rc.reconcile(flows, 0)
+        self.assertEqual(res["sums"]["gas"], "0")              # excluded like every reverted row (exit semantics unchanged)
+        self.assertEqual(res["unexplained_delta"], "-21000")
+        self.assertEqual(res["exit_code"], 1)
+        self.assertEqual(len(res["excluded_reverted"]), 1)
+        gas_warnings = [w for w in res["warnings"] if w.startswith("W-GAS-ROW-REVERTED")]
+        self.assertEqual(len(gas_warnings), 1)
+        self.assertIn("status success", gas_warnings[0])
+        code, out, _ = run_cli(flows)
+        self.assertEqual(code, 1)
+        self.assertIn("W-GAS-ROW-REVERTED", out)
+        # recorded the documented way (gas row success, value row reverted) the identity closes without warnings
+        flows["rows"][0]["status"] = "success"
+        flows["rows"].append({"tx": TX5, "status": "reverted", "direction": "out", "amount": "500", "block": 190,
+                              "counterparty": CP, "note": "reverted swap value"})
+        res = rc.reconcile(flows, 0)
+        self.assertEqual(res["unexplained_delta"], "0")
+        self.assertFalse(any(w.startswith("W-GAS-ROW-REVERTED") for w in res["warnings"]))
+
     def test_gas_on_native_asset_subtracts(self):
         flows = base_flows(is_native=True)
         flows["rows"].append({"tx": TX5, "status": "success", "direction": "gas", "amount": "21000", "block": 190, "counterparty": None, "note": ""})
@@ -282,3 +308,99 @@ class ValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CrossFilePairingTests(unittest.TestCase):
+    """Two asset files supplied in one run pair transform legs across files (FIX-BRIEF D2)."""
+
+    def _write(self, d: str, name: str, flows: dict) -> str:
+        p = os.path.join(d, name)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(flows, f)
+        return p
+
+    def _run(self, paths: list[str], extra: list[str] | None = None):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = rc.main(["--flows", *paths] + (extra or []))
+        return code, out.getvalue(), err.getvalue()
+
+    def _wrap_pair(self):
+        weth = base_flows()
+        weth["rows"].append({"tx": TX4, "status": "success", "direction": "transform_in", "amount": "100", "block": 180,
+                             "counterparty": None, "note": "wrap: Deposit"})
+        weth["closing"]["balance"] = "1400"
+        native = base_flows(is_native=True)
+        native["rows"].append({"tx": TX4, "status": "success", "direction": "transform_out", "amount": "100", "block": 180,
+                               "counterparty": None, "note": "wrap: native leg"})
+        native["closing"]["balance"] = "1200"
+        return weth, native
+
+    def test_paired_across_files_no_unpaired_warning_in_either_file(self):
+        weth, native = self._wrap_pair()
+        with tempfile.TemporaryDirectory() as d:
+            paths = [self._write(d, "weth.json", weth), self._write(d, "native.json", native)]
+            code, out, _ = self._run(paths, ["--json"])
+            self.assertEqual(code, 0)
+            data = json.loads(out)
+            self.assertEqual([r["result"]["unpaired_transforms"] for r in data["files"]], [[], []])
+            for r in data["files"]:
+                self.assertFalse(any("unpaired transform" in w for w in r["result"]["warnings"]))
+                self.assertEqual(r["result"]["pairing_scope"], "all supplied files")
+            self.assertEqual(len(data["transform_pairing"]["paired"]), 1)
+            self.assertTrue(data["transform_pairing"]["paired"][0]["amounts_equal"])
+            self.assertEqual(data["transform_pairing"]["unpaired"], [])
+            code, out, _ = self._run(paths)
+            self.assertEqual(code, 0)
+            self.assertIn("cross-file transform pairing", out)
+            self.assertIn("paired   tx " + TX4, out)
+            self.assertNotIn("UNPAIRED", out)
+
+    def test_single_file_run_still_warns_and_points_at_multi_file_usage(self):
+        weth, _ = self._wrap_pair()
+        res = rc.reconcile(weth, 0)
+        self.assertEqual(len(res["unpaired_transforms"]), 1)
+        self.assertEqual(res["pairing_scope"], "this file only")
+        self.assertTrue(any("supply the other asset's flows file" in w for w in res["warnings"]))
+
+    def test_leg_missing_in_other_file_is_unpaired_only_where_it_lives(self):
+        weth, native = self._wrap_pair()
+        native["rows"] = [r for r in native["rows"] if r["direction"] != "transform_out"]
+        native["closing"]["balance"] = "1300"
+        with tempfile.TemporaryDirectory() as d:
+            paths = [self._write(d, "weth.json", weth), self._write(d, "native.json", native)]
+            code, out, _ = self._run(paths, ["--json"])
+            self.assertEqual(code, 0)   # both files still close by their declared balances
+            data = json.loads(out)
+            self.assertEqual(len(data["files"][0]["result"]["unpaired_transforms"]), 1)
+            self.assertEqual(data["files"][1]["result"]["unpaired_transforms"], [])
+            self.assertTrue(any("in any supplied file" in w for w in data["files"][0]["result"]["warnings"]))
+            self.assertEqual(len(data["transform_pairing"]["unpaired"]), 1)
+            self.assertEqual(data["transform_pairing"]["unpaired"][0]["file"], paths[0])
+
+    def test_amount_mismatch_between_legs_is_reported(self):
+        weth, native = self._wrap_pair()
+        native["rows"][-1]["amount"] = "90"
+        native["closing"]["balance"] = "1210"
+        with tempfile.TemporaryDirectory() as d:
+            paths = [self._write(d, "weth.json", weth), self._write(d, "native.json", native)]
+            code, out, _ = self._run(paths, ["--json"])
+            self.assertEqual(code, 0)
+            data = json.loads(out)
+            pair = data["transform_pairing"]["paired"][0]
+            self.assertFalse(pair["amounts_equal"])
+            self.assertIn("amounts differ", pair["note"])
+            code, out, _ = self._run(paths)
+            self.assertIn("amounts differ", out)
+
+    def test_exit_code_is_worst_of_all_files_and_bad_file_is_usage_error(self):
+        weth, native = self._wrap_pair()
+        native["closing"]["balance"] = "1"   # native does not close
+        with tempfile.TemporaryDirectory() as d:
+            paths = [self._write(d, "weth.json", weth), self._write(d, "native.json", native)]
+            code, _, _ = self._run(paths)
+            self.assertEqual(code, 1)
+            bad = self._write(d, "bad.json", {"asset": "nope"})
+            code, _, err = self._run([paths[0], bad])
+            self.assertEqual(code, 2)
+            self.assertIn("bad.json", err)

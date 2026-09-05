@@ -17,16 +17,20 @@ Columns (12, in this order; see templates/ledger-columns.md):
   artifact_or_query concatenates, for each evidence id the finding cites, "E<n> <artifact path>" plus the
   reproducible query when it is a string or a small object (credentials must already be redacted in the
   manifest). pin_or_tx, chain_id, address, evidence_type, confidence and the free-text columns come from the
-  finding itself. A dangling evidence id renders as "E<n> (DANGLING)".
+  finding itself. A dangling evidence id renders as "E<n> (DANGLING)"; an evidence_ids value that is not a
+  list renders as "(malformed evidence_ids)" (check reports it as E-SCHEMA).
 
 check exits 1 on:
   E-FINDING-NO-EVIDENCE   a finding cites no evidence (allowed only when confidence is "unknown")
   E-EVIDENCE-DANGLING     a finding or check cites an evidence id that does not exist; a check cites a finding id
                           that does not exist
-  E-SCHEMA                duplicate finding_id / evidence_id, or findings/evidence entries that are not objects
+  E-SCHEMA                duplicate finding_id / evidence_id, findings/evidence entries that are not objects,
+                          evidence_ids that is not a list
 Warnings (exit unaffected):
-  W-EVIDENCE-UNREFERENCED an evidence row is never referenced by any finding or check
-  W-LEDGER-FIELD-EMPTY    a free-text ledger column (alternatives / coverage / stale_conditions) is empty
+  W-EVIDENCE-UNREFERENCED       an evidence row is never referenced by any finding or check
+  W-LEDGER-FIELD-EMPTY          a free-text ledger column (alternatives / coverage / stale_conditions) is empty
+  W-LEDGER-UNKNOWN-NO-EVIDENCE  a finding with confidence "unknown" cites no evidence (tolerated, but the
+                                coverage column must say why nothing could be cited)
 
 Exit codes: render 0 (2 on unreadable manifest); check 0 clean, 1 errors, 2 unreadable manifest.
 This check is narrower than validate_report.py; run both. Passing here validates internal linkage only,
@@ -109,9 +113,23 @@ def _query_text(q: Any) -> str:
         return str(q)
 
 
+MALFORMED_EVIDENCE_IDS = "(malformed evidence_ids)"
+
+
+def _evidence_ids(finding: dict) -> Optional[list]:
+    """The finding's evidence id list, or None when the field is not a list (a string would iterate per character)."""
+    ids = finding.get("evidence_ids")
+    if ids is None:
+        return []
+    return ids if isinstance(ids, list) else None
+
+
 def artifact_or_query(finding: dict, evidence_by_id: dict[str, dict]) -> str:
+    ids = _evidence_ids(finding)
+    if ids is None:
+        return MALFORMED_EVIDENCE_IDS
     parts = []
-    for eid in finding.get("evidence_ids") or []:
+    for eid in ids:
         ev = evidence_by_id.get(eid)
         if ev is None:
             parts.append(f"{eid} (DANGLING)")
@@ -126,7 +144,7 @@ def artifact_or_query(finding: dict, evidence_by_id: dict[str, dict]) -> str:
 
 def decoding_basis(finding: dict, evidence_by_id: dict[str, dict]) -> str:
     bases: list[str] = []
-    for eid in finding.get("evidence_ids") or []:
+    for eid in _evidence_ids(finding) or []:
         ev = evidence_by_id.get(eid)
         if ev and isinstance(ev.get("decoding_basis"), str) and ev["decoding_basis"] and ev["decoding_basis"] not in bases:
             bases.append(ev["decoding_basis"])
@@ -230,7 +248,8 @@ def check_manifest(manifest: dict) -> dict:
                 err("E-EVIDENCE-DANGLING", fid, f"finding {fid} cites evidence {eid} which does not exist")
         if not eids:
             if f.get("confidence") == "unknown":
-                warn("W-LEDGER-FIELD-EMPTY", fid, f"finding {fid} has no evidence; allowed only because confidence is unknown")
+                warn("W-LEDGER-UNKNOWN-NO-EVIDENCE", fid,
+                     f"finding {fid} cites no evidence; tolerated only because confidence is unknown - the coverage column must say why")
             else:
                 err("E-FINDING-NO-EVIDENCE", fid, f"finding {fid} (confidence {f.get('confidence')!r}) cites no evidence")
         for col in ("alternatives", "coverage", "stale_conditions"):

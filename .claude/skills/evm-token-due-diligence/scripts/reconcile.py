@@ -9,26 +9,33 @@ delta exceeds the tolerance you declare.
 
 Usage:
   python3 <skill-root>/scripts/reconcile.py --flows flows.json [--tolerance N] [--json]
+  python3 <skill-root>/scripts/reconcile.py --flows weth.json native.json [--tolerance N] [--json]
+      (two or more files: each asset is reconciled on its own and transform legs are PAIRED ACROSS the files)
 
-Flows file (all amounts are INTEGER BASE UNITS as decimal strings; never floats, never human units):
-  {
-    "asset":   {"symbol": "…", "address": "0x…" | null, "chain_id": N, "is_native": false, "decimals": 18},
-    "opening": {"balance": "int", "block": N},
-    "closing": {"balance": "int", "block": N},
-    "rows": [
-      {"tx": "0x…", "status": "success|reverted", "direction": "in|out|transform_in|transform_out|gas|adjustment",
-       "amount": "int", "block": N, "counterparty": "0x…", "note": ""}
-    ]
-  }
+Flows file (canonical shape; all amounts are INTEGER BASE UNITS as decimal strings; never floats, never
+human units):
+  { "asset": {"chain_id": N, "address": "0x…" | null, "is_native": false | true, "symbol": "<label>", "decimals": 18},
+    "opening": {"balance": "<int>", "block": N}, "closing": {"balance": "<int>", "block": N},
+    "rows": [ {"tx": "0x…", "status": "success|reverted", "direction": "in|out|transform_in|transform_out|gas|adjustment",
+               "amount": "<int>", "block": N, "counterparty": "0x…"|null, "note": ""} ] }
+
+  Native file: "address": null, "is_native": true; gas rows are accepted only there. One file per asset.
+  Transforms pair by tx hash ACROSS asset files when the files are supplied together in one run
+  (`--flows weth.json native.json`); a single-file run can only pair within that file and lists every other
+  leg as unpaired for manual pairing.
 
 Rules (each one exists to stop a known double-count or mislabel):
   * status "reverted": EXCLUDED from every sum (a reverted transfer moved nothing) but listed under
-    excluded_reverted with its tx so the reader sees it was considered.
+    excluded_reverted with its tx so the reader sees it was considered. Reverted VALUE rows are excluded; the
+    gas of a reverted transaction is still spent, so record it as a separate `gas` row with status "success".
+    A `gas` row marked reverted is excluded like any reverted row and raises W-GAS-ROW-REVERTED so the
+    resulting unexplained delta is not chased elsewhere.
   * in: adds. out: subtracts.
   * transform_in / transform_out: a wrap, unwrap, bridge leg or burn-for-claim. They must be paired by identical
-    tx hash (one leg in, the other leg out). A transform row whose pair is not in the same file is still applied
-    (so the delta stays visible) but reported under unpaired_transforms with a warning; the counter-leg is then
-    expected in the OTHER asset's flows file — reconcile that file too.
+    tx hash (one leg in, the other leg out; normally in two different asset files). A leg whose counter-leg is
+    not in any supplied file is still applied (so the delta stays visible) but reported under
+    unpaired_transforms with a warning. Paired legs whose amounts differ are reported in transform_pairing
+    (expected for bridge fees, unexpected for a wrap/unwrap).
   * gas: subtracts only when asset.is_native is true; on any other asset it is an error, because gas cannot be
     paid in a non-native asset.
   * adjustment: a signed amount (e.g. "-5" or "5") with a mandatory non-empty note — an "explained adjustment"
@@ -43,7 +50,11 @@ Computation:
       (positive: the account holds MORE than the explained flows account for; negative: less)
   identity line: opening + inflows + adjustments = outflows + closing + unexplained
       where inflows = in + transform_in, outflows = out + transform_out + gas, closing = declared closing and the
-      printed unexplained term is computed_closing - declared_closing (= -unexplained_delta) so both sides are equal.
+      printed unexplained term is computed_closing - declared_closing (= -unexplained_delta) so both sides are equal;
+      the sign convention of the JSON field `unexplained_delta` is stated on the line after the identity.
+
+Warnings (never change the exit code): unpaired transform, duplicate row, row outside the opening..closing window,
+non-hash tx id, W-GAS-ROW-REVERTED (a gas row marked reverted was excluded; gas is spent even on revert).
 
 Exit codes: 0 |unexplained_delta| <= tolerance, 1 exceeds tolerance, 2 usage / malformed flows file.
 """
@@ -119,7 +130,32 @@ def _balance_block(section: Any, label: str) -> tuple[int, Optional[int]]:
 # --------------------------------------------------------------------------------------
 # Core
 # --------------------------------------------------------------------------------------
-def reconcile(flows: dict, tolerance: int = 0) -> dict:
+def collect_transform_legs(flows: dict) -> list[dict]:
+    """Non-reverted transform legs of one flows file (light validation; reconcile() validates fully)."""
+    legs = []
+    rows = flows.get("rows")
+    if not isinstance(rows, list):
+        return legs
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("status") == "reverted":
+            continue
+        d = row.get("direction")
+        tx = row.get("tx")
+        if d in ("transform_in", "transform_out") and isinstance(tx, str) and tx:
+            legs.append({"index": i, "tx": tx, "direction": d, "amount": str(row.get("amount"))})
+    return legs
+
+
+def pair_scope_from(files: list[dict]) -> dict[str, set[str]]:
+    """tx hash -> set of transform directions seen across ALL supplied files."""
+    scope: dict[str, set[str]] = {}
+    for flows in files:
+        for leg in collect_transform_legs(flows):
+            scope.setdefault(leg["tx"], set()).add(leg["direction"])
+    return scope
+
+
+def reconcile(flows: dict, tolerance: int = 0, pair_scope: Optional[dict] = None) -> dict:
     if tolerance < 0:
         raise FlowsError("tolerance must be >= 0")
     asset = flows.get("asset")
@@ -181,6 +217,12 @@ def reconcile(flows: dict, tolerance: int = 0) -> dict:
         entry = {"index": i, "tx": tx, "direction": direction, "amount": str(amount), "block": blk,
                  "counterparty": cp, "note": note if isinstance(note, str) else None}
         if status == "reverted":
+            if direction == "gas":
+                warnings.append(
+                    f"W-GAS-ROW-REVERTED rows[{i}]: gas row {amount} tx {tx} is marked reverted and was EXCLUDED like every reverted "
+                    "row, but gas is spent even when a transaction reverts. If this is the gas of a reverted transaction, record it "
+                    "as a separate gas row with status success (keep the reverted VALUE row as reverted); the unexplained delta "
+                    "below may be exactly this amount")
             excluded_reverted.append(entry)
             continue
         if blk is not None:
@@ -192,16 +234,22 @@ def reconcile(flows: dict, tolerance: int = 0) -> dict:
         counts[direction] += 1
         applied.append(entry)
 
-    # transform pairing by tx hash
+    # transform pairing by tx hash (within this file, or across every file supplied in the same run)
     tx_dirs: dict[str, set[str]] = {}
     for e in applied:
         if e["direction"] in ("transform_in", "transform_out") and e["tx"]:
             tx_dirs.setdefault(e["tx"], set()).add(e["direction"])
+    if pair_scope is not None:
+        for tx, dirs in pair_scope.items():
+            tx_dirs.setdefault(tx, set()).update(dirs)
     unpaired = [e for e in applied if e["direction"] in ("transform_in", "transform_out")
                 and tx_dirs.get(e["tx"], set()) != {"transform_in", "transform_out"}]
+    where = "in any supplied file" if pair_scope is not None else "in this file"
+    hint = ("" if pair_scope is not None
+            else " (supply the other asset's flows file in the same run, e.g. --flows weth.json native.json, to pair across files)")
     for e in unpaired:
         warnings.append(f"unpaired transform: rows[{e['index']}] {e['direction']} {e['amount']} tx {e['tx']} has no counter-leg "
-                        "in this file; applied anyway so the delta stays visible (reconcile the other asset's file)")
+                        f"{where}; applied anyway so the delta stays visible{hint}")
 
     # duplicate detection (possible double count)
     seen: dict[tuple, int] = {}
@@ -250,6 +298,7 @@ def reconcile(flows: dict, tolerance: int = 0) -> dict:
         },
         "excluded_reverted": excluded_reverted,
         "unpaired_transforms": unpaired,
+        "pairing_scope": "all supplied files" if pair_scope is not None else "this file only",
         "duplicates": duplicates,
         "warnings": warnings,
         "exit_code": EXIT_OK if within else EXIT_UNEXPLAINED,
@@ -287,7 +336,7 @@ def render_human(res: dict) -> str:
             lines.append(f"  rows[{e['index']}] {e['direction']} {e['amount']} tx {e['tx']}")
     if res["unpaired_transforms"]:
         lines.append("")
-        lines.append("unpaired transforms (applied; counter-leg expected in the other asset's file):")
+        lines.append(f"unpaired transforms (applied; no counter-leg found in {res.get('pairing_scope', 'this file only')}):")
         for e in res["unpaired_transforms"]:
             lines.append(f"  rows[{e['index']}] {e['direction']} {e['amount']} tx {e['tx']}")
     if res["duplicates"]:
@@ -306,23 +355,78 @@ def render_human(res: dict) -> str:
     return "\n".join(lines)
 
 
+def transform_pairing_summary(files: list[tuple[str, dict]]) -> dict:
+    """Cross-file view of transform legs: paired txs (with amount comparison) and unpaired legs."""
+    legs_by_tx: dict[str, list[dict]] = {}
+    for path, flows in files:
+        for leg in collect_transform_legs(flows):
+            legs_by_tx.setdefault(leg["tx"], []).append({**leg, "file": path})
+    paired, unpaired = [], []
+    for tx, legs in legs_by_tx.items():
+        dirs = {l["direction"] for l in legs}
+        if dirs == {"transform_in", "transform_out"}:
+            ins = [l for l in legs if l["direction"] == "transform_in"]
+            outs = [l for l in legs if l["direction"] == "transform_out"]
+            amounts_equal = {l["amount"] for l in ins} == {l["amount"] for l in outs}
+            paired.append({"tx": tx, "legs": legs, "amounts_equal": amounts_equal,
+                           "note": None if amounts_equal else
+                           "amounts differ between legs: expected for bridge fees or burn-for-claim, unexpected for a wrap/unwrap"})
+        else:
+            unpaired.extend(legs)
+    return {"paired": paired, "unpaired": unpaired}
+
+
+def render_pairing_human(summary: dict) -> str:
+    lines = ["", "cross-file transform pairing:"]
+    if not summary["paired"] and not summary["unpaired"]:
+        lines.append("  (no transform legs in the supplied files)")
+    for p in summary["paired"]:
+        legs = "; ".join(f"{l['direction']} {l['amount']} [{l['file']} rows[{l['index']}]]" for l in p["legs"])
+        flag = "" if p["amounts_equal"] else f"  <- {p['note']}"
+        lines.append(f"  paired   tx {p['tx']}: {legs}{flag}")
+    for l in summary["unpaired"]:
+        lines.append(f"  UNPAIRED tx {l['tx']}: {l['direction']} {l['amount']} [{l['file']} rows[{l['index']}]]")
+    return "\n".join(lines)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Reconcile one asset's flows: opening + inflows + adjustments = outflows + closing + unexplained.")
-    ap.add_argument("--flows", required=True, help="flows JSON file (integer base units)")
+    ap = argparse.ArgumentParser(description="Reconcile one asset's flows: opening + inflows + adjustments = outflows + closing + unexplained. "
+                                             "Give several flows files (one per asset) in one run to pair transform legs across them.")
+    ap.add_argument("--flows", required=True, nargs="+", metavar="FLOWS",
+                    help="flows JSON file(s) (integer base units); one file per asset, several files pair transforms across assets")
     ap.add_argument("--tolerance", type=int, default=0, help="max |unexplained_delta| in base units that still exits 0 (default 0)")
     ap.add_argument("--json", action="store_true", help="print JSON instead of the human summary")
     args = ap.parse_args(argv)
     try:
-        flows = load_flows(args.flows)
-        res = reconcile(flows, args.tolerance)
+        loaded = [(path, load_flows(path)) for path in args.flows]
+        if len(loaded) == 1:
+            res = reconcile(loaded[0][1], args.tolerance)
+            if args.json:
+                print(json.dumps(res, indent=2))
+            else:
+                print(render_human(res))
+            return res["exit_code"]
+        scope = pair_scope_from([f for _, f in loaded])
+        results = []
+        for path, flows in loaded:
+            try:
+                results.append({"path": path, "result": reconcile(flows, args.tolerance, pair_scope=scope)})
+            except FlowsError as e:
+                raise FlowsError(f"{path}: {e}")
+        summary = transform_pairing_summary(loaded)
     except FlowsError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_USAGE
+    exit_code = max(r["result"]["exit_code"] for r in results)
     if args.json:
-        print(json.dumps(res, indent=2))
+        print(json.dumps({"files": results, "transform_pairing": summary, "exit_code": exit_code}, indent=2))
     else:
-        print(render_human(res))
-    return res["exit_code"]
+        for r in results:
+            print(f"=== {r['path']} ===")
+            print(render_human(r["result"]))
+            print()
+        print(render_pairing_human(summary))
+    return exit_code
 
 
 if __name__ == "__main__":

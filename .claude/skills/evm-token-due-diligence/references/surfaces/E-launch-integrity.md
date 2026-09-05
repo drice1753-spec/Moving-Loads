@@ -139,17 +139,20 @@ verified at use time via RPC/receipt before it is used in a decoding step.
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| E-LAUNCH | Launch parameters, allocations, exemptions, direct-buy recipient, funding, sequence and early transfers/sales are decoded from the launch tx(s) | verified deployment receipt + decoded calldata + ordered launch logs | `receipt`, `calldata`, `log_decoded`, `trace` | never (historical); the DECODING is stale if factory source correspondence is later refuted |
-| E-FACTORY-VERSION | The exact factory version and template are identified; target runtime matches the template's | factory code hash at deployment block + sibling runtime hash sample | `bytecode`, `receipt` | new factory version does not change this; target upgrade changes the current runtime only |
-| E-EXEMPTIONS | Every launch-time exemption is listed with its origin (automatic/manual) and its state at P1 | calldata or setter receipts + P1 flag reads | `calldata`, `rpc_state` | exemption setter call after P1 |
-| E-DIRECT-BUY-RECIPIENT | The initial buy's recipient and tax treatment are established from the call and its logs | buy calldata + Transfer log `to` + amount check against curve/pool math | `calldata`, `log_decoded`, `receipt` | never (historical) |
-| E-COHORT | The cohort is defined before measurement, with inclusion rule, bounds, sources, exclusions, coverage | `discovery[]` entry + paginated log ranges with coverage | `log_decoded`, `manual_note` (definition) | new cohort members cannot appear; coverage improves if failed ranges are re-read |
-| E-EARLY-SALES | Sales, rebuys and redistribution in the first N blocks are receipt-proven with pool mechanics | per-sale receipt + Swap/curve event + quote recipient | `receipt`, `log_decoded`, `trace` | never for the window; later sales belong to the follow-up range |
-| E-DETERMINISTIC | CREATE2 address reconstruction reproduces the target and the salt is characterized | deployer, salt, init code hash, recomputed address | `trace`, `calldata`, `bytecode` | never |
-| E-SEQUENCE | The token->pool->lock->exemptions order and any tradeable-before-lock window are measured | ordered (block, tx index, log index) rows | `receipt`, `log_decoded` | never |
-| E-FUNDING | The launch signer's pre-launch funding sources are listed with neutral roles | inflow txs (native via trace, ERC-20 via logs) within the stated window | `trace`, `log_decoded` | never |
+Check ids starting with `E-` are surface-E (launch integrity) CHECK ids; validator error codes
+(`E-SCHEMA`, `E-PIN-*`, `E-REPORT-*`, ...) are a separate namespace and never appear in `checks[]`.
+
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| E-LAUNCH | historical_launch_integrity | Launch parameters, allocations, exemptions, direct-buy recipient, funding, sequence and early transfers/sales are decoded from the launch tx(s) | verified deployment receipt + decoded calldata + ordered launch logs | `receipt`, `calldata`, `log_decoded`, `trace` | never (historical); the DECODING is stale if factory source correspondence is later refuted |
+| E-FACTORY-VERSION | historical_launch_integrity | The exact factory version and template are identified; target runtime matches the template's | factory code hash at deployment block + sibling runtime hash sample | `bytecode`, `receipt` | new factory version does not change this; target upgrade changes the current runtime only |
+| E-EXEMPTIONS | historical_launch_integrity | Every launch-time exemption is listed with its origin (automatic/manual) and its state at P1 | calldata or setter receipts + P1 flag reads | `calldata`, `rpc_state` | exemption setter call after P1 |
+| E-DIRECT-BUY-RECIPIENT | historical_launch_integrity | The initial buy's recipient and tax treatment are established from the call and its logs | buy calldata + Transfer log `to` + amount check against curve/pool math | `calldata`, `log_decoded`, `receipt` | never (historical) |
+| E-COHORT | historical_launch_integrity | The cohort is defined before measurement, with inclusion rule, bounds, sources, exclusions, coverage | `discovery[]` entry + paginated log ranges with coverage | `log_decoded`, `manual_note` (definition) | new cohort members cannot appear; coverage improves if failed ranges are re-read |
+| E-EARLY-SALES | historical_launch_integrity | Sales, rebuys and redistribution in the first N blocks are receipt-proven with pool mechanics | per-sale receipt + Swap/curve event + quote recipient | `receipt`, `log_decoded`, `trace` | never for the window; later sales belong to the follow-up range |
+| E-DETERMINISTIC | historical_launch_integrity | CREATE2 address reconstruction reproduces the target and the salt is characterized | deployer, salt, init code hash, recomputed address | `trace`, `calldata`, `bytecode` | never |
+| E-SEQUENCE | historical_launch_integrity | The token->pool->lock->exemptions order and any tradeable-before-lock window are measured | ordered (block, tx index, log index) rows | `receipt`, `log_decoded` | never |
+| E-FUNDING | historical_launch_integrity | The launch signer's pre-launch funding sources are listed with neutral roles | inflow txs (native via trace, ERC-20 via logs) within the stated window | `trace`, `log_decoded` | never |
 
 Statuses follow the manifest rules: `pass` and `finding` need evidence ids; `unknown`/`skipped` need a
 reason (cite the limitation id when a pruned or rate-limited range caused it). `unknown` is never a

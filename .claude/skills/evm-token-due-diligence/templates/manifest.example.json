@@ -1187,8 +1187,8 @@
     ]
   },
   "report": {
-    "path": "report.md",
-    "sha256": "8a39aa6a2008a79e6cfec129460748f3343bfe07f5ad03319337d527e6375cf8",
+    "path": "report.example.md",
+    "sha256": "7f65f58c29b7479201ea3897d58aa6ed93a6d8baf60a6aa686b82f46fde90187",
     "format": "markdown"
   }
 }

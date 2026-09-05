@@ -7,11 +7,11 @@ research (2026-09, from the published repository `ponsdotdev/ponsfamily` and sec
 identifies as a launchpad deployed on Robinhood Chain in two generations: V1 (CREATE2 token, one-sided
 Uniswap v3 position held by a locker, optional atomic router buy) and V2 (constant-product curve with a
 phantom quote reserve, graduating into a permanently locked full-range Uniswap v4 pool with a singleton
-afterSwap fee hook). Everything Pons-specific below is "per the published source at research time" and
-must be re-verified against explorer-verified source and deployed bytecode: the research found that the
-committed factory calls curve functions the committed curve does not define, so the repository cannot be
-the verified source for at least one deployed contract. The pattern rules apply to any pump-style
-launchpad on any chain.
+afterSwap + afterSwapReturnsDelta fee hook, with beforeInitialize gating). Everything Pons-specific
+below is "per the published source at research time" and must be re-verified against explorer-verified
+source and deployed bytecode: the research found that the committed factory calls curve functions the
+committed curve does not define, so the repository cannot be the verified source for at least one
+deployed contract. The pattern rules apply to any pump-style launchpad on any chain.
 
 Extends `references/surfaces/E-launch-integrity.md` (`E-LAUNCH`, `E-FACTORY-VERSION`, `E-EXEMPTIONS`,
 `E-DIRECT-BUY-RECIPIENT`, `E-COHORT`, `E-EARLY-SALES`, `E-DETERMINISTIC`, `E-SEQUENCE`),
@@ -23,9 +23,12 @@ and `references/platforms/uniswap-v4.md` (V2-style).
 
 ## When it applies (detection from the target packet)
 
-1. The deployment receipt's `to` is a contract (factory), not a plain CREATE from an EOA, and the target's
-   first `Transfer` log mints 100% of supply to a CONTRACT (curve, factory, or position manager) - never to
-   an EOA. Verify by receipt (`E-LAUNCH` step 1), then record the factory as `launch_platform`.
+1. The launch receipt contains a launch event (`TokenLaunched` below) whose emitter (the log's `address`
+   field) is a contract - the factory. The tx `to` may be the factory itself (direct `launchToken`) or a
+   forwarder/router (`launchTokenFor` path, the normal creator flow with an opening buy) - record both.
+   The target's first `Transfer` log mints 100% of supply to a CONTRACT (curve, factory, or position
+   manager) - never to an EOA. Verify by receipt (`E-LAUNCH` step 1), then record the emitter as
+   `launch_platform` and a differing tx `to` as `router`/`other`.
 2. The launch receipt carries a launch event naming token, curve and deployer. Published Pons signatures
    (topic0 recomputed with `ddcore.keccak256_hex`; confirm against the receipt):
    V2 `TokenLaunched(address,address,address,address,uint256,uint256)`
@@ -54,11 +57,13 @@ and `references/platforms/uniswap-v4.md` (V2-style).
 | Threshold | `readyToGraduate()` when `sellableTokens() == 0` (real quote reserve = threshold); sells revert from here | curve reads at the crossing block | C |
 | Graduation step 1 | `graduate(token)` (anyone; auto-attempted on the crossing buy, failures swallowed) sweeps fees, halts trading, moves reserves to the factory (`LaunchSwept`) | factory receipt | B, F |
 | Graduation step 2 | `createGraduatedPool(token)` (anyone, retryable): seeds a v4 pool with the hook at the terminal price, mints a full-range position, sends the NFT to the locker, locks excess tokens permanently (`PoolGraduated`, `GraduationTokensPermanentlyLocked`) | factory receipt, `Initialize`, `ModifyLiquidity`, NFT `Transfer` | B, D |
-| Post-graduation | hook takes `hookFeeBps + creatorTaxBps` per swap; `sweepPoolFees` converts and distributes; owner rescue windows if stuck | `Swap` by PoolId, `HookFeeCollected`, `FeesSwept` | C, F |
+| Post-graduation | hook takes `hookFeeBps + creatorTaxBps` per swap; `sweepPoolFees` converts and distributes; the hook OWNER can `rescuePoolFees` when conversion is stuck; the v4 pool's own LP fee is zero per source | `Swap` by PoolId, `HookFeeCollected`, `PoolFeesSwept` (hook), `PoolFeesRescued` (hook owner) | C, F |
 
-V1 pattern: full supply minted at launch into a one-sided v3 position from `initialTick` to the max
-tick, NFT to a configurable locker with fee redirect to the creator wallet, same-block anti-snipe plus
-`maxWalletBps`/`maxTxBps` for `restrictionBlocks`, graduation status derived from the locked principal.
+V1 pattern: full supply minted at launch into a one-sided v3 position (per source from `initialTick` to
+the max tick; whether that range sits above or below the price depends on which side the target is -
+`references/platforms/uniswap-v3.md`), NFT to a configurable locker with fee redirect to the creator
+wallet, same-block anti-snipe plus `maxWalletBps`/`maxTxBps` for `restrictionBlocks`, graduation status
+derived from the locked principal.
 
 ## Objects to resolve
 
@@ -67,13 +72,13 @@ published source; a deployed factory may differ - fall back to a selector scan a
 
 | Object | Scope role | Resolve by |
 |---|---|---|
-| Factory (exact version) | `launch_platform` | `to` of the launch tx; code hash at launch block and P1 |
+| Factory (exact version) | `launch_platform` | emitter of `TokenLaunched` in the launch receipt (NOT the tx `to`, which is the forwarder on the atomic launch-and-buy path); code hash at launch block and P1 |
 | Token, curve | `token`, `curve` | `TokenLaunched` topics; `getLaunchedToken(address)` `0x3cf28b5a` |
 | Locker, hook, buyback vault, fee escrow, forwarder, deployer helper, graduation executor | `locker`, `hook`, `vault`, `treasury`, `router`, `other` | factory getters `locker()` `0xd7b96d4e`, `memeHook()` `0x6651812c`, `buybackVault()` `0xf1f5c993`, `feeEscrow()` `0xc4b7de97`, `launchForwarder()` `0x9b924452`, `launchDeployer()` `0x858f5964`, `graduationExecutor()` `0xcc6d7a39` |
 | DEX infrastructure | `pool_manager`, `position_manager` | `poolManager()` `0xdc4c90d3`, `positionManager()` `0x791b98bc`, `permit2()` `0x12261ee7`; then `Initialize`/`PoolGraduated` receipts |
 | Quote (pair) asset | `other` | `TokenLaunched.pairToken` (zero = native); `pairToken()` `0x3de35b79` on the curve |
 | Pool / position | `pool` (PoolId) / `position_nft` | `PoolGraduated.positionId`; v4 key components from `Initialize` |
-| Fee parties | `fee_recipient`, `treasury` | `creatorFeeRecipient()` `0x9fa36cdc`, `originalDeployer()` `0x81cf58a9` (curve); `protocolFeeRecipient()` `0x64df049e`, `feeSweepOperator()` `0x8a36a6bb` (hook) |
+| Fee parties | `fee_recipient`, `treasury`, `deployer` | factory launch record `getLaunchedToken(token)` fields `deployer` (original deployer) and `creatorFeeRecipient` (current; changeable through the factory - 3-day timelock per the verify-at-use table; read who may call it); curve `deployer()` `0xd5f39488` = the CURRENT creator-fee recipient (overwritten by `setCreatorFeeRecipient`, never the original deployer) and `buybackCreatorRecipient()` `0x3cd1fb8f` (immutable, the original deployer); hook `protocolFeeRecipient()` `0x64df049e`, `feeSweepOperator()` `0x8a36a6bb` |
 | Platform owner | `owner` | `owner()`/`pendingOwner()` `0xe30c3978` on factory, hook, locker, vault |
 
 ## Reads and decodes
@@ -107,7 +112,7 @@ bytes - a different selector means a different deployed version):
   `0x8113d738abdcb6b38357e9d53a54a7157861a09031b453651f0fe7fe151f59df` (seller, recipient of the quote);
   `CurveBuyRefunded(address,uint256)` `0xa69e8258ccc7b9bbb70ab953fc2d1062b4ee28b8ca827534097e1732e87b0262`;
   `FeesSwept(uint256,uint256,uint256)` `0x9f4cd7c4ed99d08a797804560c9c5d71d2cf7e101f2e3b5e7d1ca8a24c370e4f`
-  (protocol, buyback, creator); `LaunchSwept(address,uint256,uint256)`
+  (CURVE event, curve phase only; protocol, buyback, creator); `LaunchSwept(address,uint256,uint256)`
   `0xcdb72f157fd3666758a6ce201387ffb52038c7562e4fff352828da1096c4b6b4`;
   `PoolGraduated(address,uint256,uint256,uint256)`
   `0x0a44ef75df69c534f43cd6c1aa3ef8983065fe5fe79ef9e79f6494e6f258c259`;
@@ -117,7 +122,16 @@ bytes - a different selector means a different deployed version):
   `0x7017304fdd491394686dce984eac721f0be1a22228346210f16694772bde44ca`;
   `AutoGraduationFailed(address,uint256)` `0xe2cd2f31ebc05ec28640102987f4c8fc5f20e269e1b3aa82577f3f2f0e35c7c6`;
   `HookFeeCollected(bytes32,address,uint256,uint256)`
-  `0xc532c43b3423e14ef72748f1c8291238829ca0af8ba9b67975ad1483485a4b4d`.
+  `0xc532c43b3423e14ef72748f1c8291238829ca0af8ba9b67975ad1483485a4b4d`;
+  `PoolFeesSwept(bytes32,uint256,uint256,uint256,uint256)`
+  `0x2f3c43579b9064b6f28edcf41608f3815792d274a56afe024359703cb4ea9b30` (hook; poolId indexed; data
+  protocol, buyback, creator, tokensLocked); `PoolFeesRescued(bytes32,address,uint256,uint256)`
+  `0x0fbb28f9c335f55dcc5cc19e595ab55f9e6a0fd1b58ad77be3a98f99901daaff` (hook owner path);
+  `LaunchForceSwept(address)` `0x52c1a28345695afc7f6b7629133124dec5d61ee745affd65e4fd2a776bc05840`
+  (factory owner); `CreatorFeeRecipientUpdated(address,address)`
+  `0x2cc664e1ac1e2d05c0d4637bb63ec8189113b6ac39276be8977e26216a8cdd19` (curve; the stale condition
+  for every fee-party read). Post-graduation sweeps emit `PoolFeesSwept` on the HOOK; filtering hook logs
+  on the curve's `FeesSwept` topic returns nothing and proves nothing about sweeps.
 
 ## The direct-curve-buy-recipient and tax-treatment rule (E-DIRECT-BUY-RECIPIENT)
 
@@ -133,7 +147,9 @@ proves nothing about who received the tokens or what tax applied. Never assume t
    the curve; V1: the `Swap` and token `Transfer` in the launch receipt.
 2. Decode the recipient three ways and require agreement: `CurveBuy` topic2, the buy calldata's third word
    (or the forwarder call's `recipient` word), and the token `Transfer.to`. Compare with the tx `from`,
-   `TokenLaunched.deployer`, `originalDeployer()`, `creatorFeeRecipient()`. Record each address with a
+   `TokenLaunched.deployer`, the factory record `getLaunchedToken(token).deployer` and
+   `.creatorFeeRecipient`, and the curve's `deployer()` (CURRENT creator-fee recipient) and
+   `buybackCreatorRecipient()` (original deployer). Record each address with a
    neutral role: `launch_signer` (tx from), `deployer` (launch record), `fee_recipient`, `holder`
    (recipient). Different addresses are a fact to record, not a conclusion about identity.
 3. Tax treatment: from the `CurveBuy` fields compute `fee/quoteIn` and `tax/quoteIn`; compare with
@@ -169,7 +185,8 @@ verify-at-use):
 | Protocol share `protocolFeeShareBps` | % of the BASE-FEE BUCKET (cap 50%) | hook policy, frozen per launch | `protocolFeeRecipient` |
 | Creator bucket | remainder of the base-fee bucket | - | creator (claim-based via the fee escrow) |
 | Buyback slice `buybackBurnBps` | % of the CREATOR BUCKET, only if `buybackEnabled` | hook policy / launcher flag | buys the launched token on its own curve or pool and LOCKS it in the buyback vault with a multi-year linear vest - not burned, per source |
-| Post-graduation hook fee `hookFeeBps` | % of the unspecified currency of each swap (cap 10%; plus `creatorTaxBps`, combined cap 20%) | hook policy | pending in the hook until `sweepPoolFees(bytes32,uint256,uint256)` `0x3d61055e` by the creator or the `feeSweepOperator` converts memecoin-denominated fees against the pool's own liquidity (bounded by `maxInternalPriceImpactBps`) and distributes as above |
+| Post-graduation hook fee `hookFeeBps` | % of the unspecified currency of each swap (cap 10%; plus `creatorTaxBps`, combined cap 20%) | hook policy | pending in the hook until `sweepPoolFees(bytes32,uint256,uint256)` `0x3d61055e` by the creator or the `feeSweepOperator` converts memecoin-denominated fees against the pool's own liquidity (bounded by `maxInternalPriceImpactBps`) and distributes as above (`PoolFeesSwept`); the hook OWNER can `rescuePoolFees(bytes32)` `0x5cbe8117` (`PoolFeesRescued`) - an owner fee-custody path |
+| v4 pool LP fee | key `fee` = 0 per source: the factory reverts a launch config whose `poolFee` is non-zero (`CoreLpFeeMustBeZero`), so the entire post-graduation trading fee is the hook take | launch config / factory guard | none - LPs earn nothing from the core fee; verify `getSlot0.lpFee == 0` at P1 and `Swap.fee == 0` in receipts; a non-zero value is a deviation from the committed source, and an LP-fee route must never be counted next to the hook take |
 
 Rules: payouts are claim-based (`F-CLAIM-AUTH`: who can claim, to which address, whether the destination
 is fixed); the internal fee conversion is a platform-initiated sell that consumes the pool's depth (a
@@ -207,7 +224,7 @@ Who controls the liquidity afterwards - test each, do not read the name:
 | NFT burned (sent to a dead address) | `ownerOf` reverts or returns the dead address; conventional, not provable destruction | `B-PRINCIPAL` |
 | NFT held by the platform (factory, executor, EOA) | `ownerOf`; the holder's admin surface | `B-PRINCIPAL` (removable) |
 | Swept phase (reserves in the factory before pool creation) | launch record phase; factory owner powers `rescueSweptGraduation(address,address)` `0xdbcb9c76` after a source delay of 7 days, `forceSweptGraduation(address)` `0x7aed273e`, `rescueCurveFees(address)` `0x189eb0f5` | `B-CURVE-PHASE-CUSTODY` (principal under platform-owner custody while stuck) |
-| Hook authority on the pool | hook address bits (must be afterSwap-only per source; any removal bit set is a finding), hook `owner()` and setters | `B-V4-HOOK-PERMISSIONS`, `B-V4-HOOK-ADMIN` |
+| Hook authority on the pool | hook address bits: per the committed source the hook declares beforeInitialize (bit 13), afterSwap (bit 6) and afterSwapReturnsDelta (bit 2) - low-14-bit mask `0x2044` - because it takes its fee from the swap output; any of bits 11/9/8/1/0 (liquidity gating or removal takes) or 7/3 (beforeSwap, beforeSwapReturnsDelta) set is a finding; bit 13 means the hook can gate which pools are created with it (per source `beforeInitialize` reverts unless the caller is its `factory()`); confirm with `getHookPermissions()` `0xc4e833ce` and the address bits (both verify-at-use); then hook `owner()` and setters | `B-V4-HOOK-PERMISSIONS`, `B-V4-HOOK-ADMIN` |
 | V1: NFT in a configurable locker with fee redirect | v3 reference: `ownerOf`, approvals, locker selectors, `collect` vs `decreaseLiquidity` forwarding | `B-V3-LOCKER-FORWARDING` |
 
 ## The exact-factory-version rule (E-FACTORY-VERSION)
@@ -216,8 +233,11 @@ Why: several factories coexist (V1, V2, and a deleted repository note named a di
 address), owner-mutable configs change economics between launches, and the deployed curve differs from
 the committed one. A finding decoded with the wrong version's ABI is wrong silently.
 
-1. Factory = `to` of the verified launch tx. Read its runtime at the launch block and at P1; record both
-   code hashes and `owner()`. Research addresses are labels to compare against, never identity.
+1. Factory = emitter of the verified `TokenLaunched` log. The tx `to` is recorded separately (role
+   `router`/`other`) when it differs and must equal the factory's `launchForwarder()` read at the launch
+   block (per source only the forwarder may call `launchTokenFor`). Read the factory runtime at the launch
+   block and at P1; record both code hashes and `owner()`. Research addresses are labels to compare
+   against, never identity.
 2. Token and curve are per-launch deployments with immutables, so their runtime hashes differ per launch:
    sample N sibling launches from the same factory (`TokenLaunched` logs in a declared range), read their
    token and curve runtimes, mask immutable offsets, and compare. Identical masked hashes = same template
@@ -236,7 +256,7 @@ the committed one. A finding decoded with the wrong version's ABI is wrong silen
 
 | Parameter | Origin | How determined |
 |---|---|---|
-| supply, curve fee, phantom quote, graduation threshold, pool fee, tick spacing | platform config (owner-set per `launchConfigId`; automatic for the launcher) | `getLaunchConfig(id)` at the launch block vs the launch record; constant across siblings using the same id |
+| supply, curve fee, phantom quote, graduation threshold, pool fee (source forces 0: `CoreLpFeeMustBeZero`), tick spacing | platform config (owner-set per `launchConfigId`; automatic for the launcher) | `getLaunchConfig(id)` at the launch block vs the launch record; constant across siblings using the same id |
 | creator fee recipient, creator tax, buyback flag, economics pin, salt, pair token, config id | launcher (manual) | launch calldata words |
 | snipe-tax exemption list | launcher (manual; capped) | calldata `address[]` |
 | deployer, creator fee recipient, forwarder recipient exemptions | automatic | factory/forwarder code; identical across siblings |
@@ -285,6 +305,13 @@ redistribution" (`references/attribution.md`).
 - Counting the buyback vault as burned supply; per source it vests, and the beneficiary must be read.
 - Calling the locker immutable because it has no owner function besides `setFactory`, without reading
   whether `setFactory` was already used and whether the hook can still block or take on removals.
+- Reading the curve's `deployer()` as the original deployer; per source it is the mutable creator-fee
+  recipient (`setCreatorFeeRecipient` overwrites it); the original deployer is `buybackCreatorRecipient()`
+  and the factory record's `deployer` field.
+- Recording the tx `to` of a forwarder launch as the factory, then reporting a factory-version mismatch;
+  the factory is the `TokenLaunched` emitter.
+- Filtering the hook for the curve's `FeesSwept` topic and reporting "no sweeps"; post-graduation sweeps
+  are `PoolFeesSwept`, and `PoolFeesRescued` is the owner path.
 
 ## Verify-at-use table
 
@@ -295,22 +322,25 @@ is asserted; confidence is the research's own.
 | Item | Research value | Confidence | Verify at use time by |
 |---|---|---|---|
 | Chain | Robinhood Chain only, chain id 4663 | high | `eth_chainId`; `references/chains/robinhood-chain.md` |
-| V1 factory | `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB` | high | `to` of the launch tx; code hash; `TokenLaunched` (10-field) receipts emitted by it |
-| V2 factory | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | high | same; `TokenLaunched` (6-field) receipts; getters above |
+| V1 factory | `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB` | high | emitter of `TokenLaunched` (10-field) in the launch receipt; code hash |
+| V2 factory | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | high | emitter of `TokenLaunched` (6-field); `launchForwarder()` equals the tx `to` on forwarder launches; code hash; getters above |
 | Other "V2 deployment" and "Genesis Buyback Wallet" addresses in a deleted repo doc | `0xb6d1bf07...16aba3`, `0x379e850c...9296` | low | treat as unrelated unless a receipt ties them to the target |
 | Platform token (PONS) | `0x39dBED3a2bd333467115dE45665cC57F813C4571` | medium | a separate target; never conflate with a launched token; resolve from verified contracts |
 | Legacy (V1) locker | `0x31ca5E101941A93A7DD6d0497928700625CF54B5` | medium | `ownerOf(positionId)` on the v3 NFPM at P1 |
 | Forwarder, hook, locker, vault, escrow, deployer helper, executor (V2) | not in the repository | - | factory getters at the launch block/P1; receipts |
-| Live fee values (1% curve/hook fee; 70/30 creator/protocol, legacy 90/10; 80/20 use of protocol share) | secondary reports | medium | `feeBps`, `hookFeeBps`, `protocolFeeShareBps`, `buybackBurnBps` reads; launch snapshot; `FeesSwept` receipts |
+| Live fee values (1% curve/hook fee; 70/30 creator/protocol, legacy 90/10; 80/20 use of protocol share) | secondary reports | medium | `feeBps`, `hookFeeBps`, `protocolFeeShareBps`, `buybackBurnBps` reads; launch snapshot; `FeesSwept` (curve) / `PoolFeesSwept` (hook) receipts |
 | Launch fee | 0.0005 ETH reported | medium | `launchFee()`; the launch receipt's value |
 | Graduation threshold / supply | 4.2 ETH real reserve / 1e9 tokens reported | medium | `TokenLaunched.graduationThreshold`, `getLaunchConfig(id)`, `totalSupply()` |
 | Snipe tax | start 99% (source cap 9900 bps); window: committed source default 15 s, cap 60 s, secondary reports ~5 s decay | medium/low | `snipeTaxStartBps()`, `snipeTaxSeconds()` at the launch block; differential from receipts |
 | Locker has no withdrawal path; buyback vested 5 years; rescue delay 7 days; creator-recipient override timelock 3 days | committed source | high for the source, unknown for deployed bytecode | selector scan + explorer-verified source correspondence for the deployed addresses |
 | Audits | none published found; reviews "in progress" per one secondary source | low | ask for the report and match its scope to deployed code hashes (`H-AUDIT-SCOPE`) |
-| Operator | "Pons Labs, LLC"; pseudonymous developer | low | outside scope unless project-control evidence ties it to an address (`references/attribution.md`) |
+| Operator identity | not recorded (out of scope) | - | not investigated: the factory address in the launch receipt is the only platform identity, and identity work is outside this skill (`references/attribution.md`) |
 | Conflation list | PONSCORE, ponspad, PonsVault, hood.fun, Pools.trade (Uniswap Labs), TrustSwap, `ponfamily.com` (not the official docs host) | medium | the factory address in the launch receipt is the only identity of the platform |
 
 ## Checks to add
+
+Check ids starting with `E-` are surface-E (launch integrity) CHECK ids; validator error codes
+(`E-SCHEMA`, `E-PIN-*`, `E-REPORT-*`, ...) are a separate namespace and never appear in `checks[]`.
 
 | check_id | surface | Proposition | Minimum evidence | Stale condition |
 |---|---|---|---|---|
@@ -320,8 +350,8 @@ is asserted; confidence is the research's own.
 | B-CURVE-PHASE-CUSTODY | canonical_lp_principal_custody | Who holds the principal at P1 (curve, factory in swept phase, locker) and which owner powers apply in that phase | phase read + holder balances + owner power selectors (`rpc_state`, `bytecode`) | phase change |
 | B-GRADUATION-LOCK | canonical_lp_principal_custody | The graduated position's holder at P1 has no removal path, including hook removal bits and locker forwarding | `ownerOf` + locker scan + hook bits (`rpc_state`, `bytecode`) | NFT transfer; locker or hook change |
 | C-CURVE-SELL-GATE | sellability_exit_depth | Whether sells revert at P1 (threshold reached, pool not yet created) or the curve is live | `readyToGraduate`/`graduated` reads + a read-only `sell` `eth_call` (`rpc_state`) | graduation step |
-| F-CURVE-FEE-SPLIT | admin_treasury_reward_custody | Every fee percentage is stated with its base (gross leg, fee bucket, creator bucket) and recipient, from the launch snapshot | curve and hook reads + one `FeesSwept` receipt (`rpc_state`, `receipt`) | policy change for new launches |
-| F-HOOK-SWEEP-AUTH | admin_treasury_reward_custody | Who can sweep post-graduation fees and how the internal conversion is bounded | hook reads + `sweepPoolFees` receipt (`rpc_state`, `receipt`) | operator change |
+| F-CURVE-FEE-SPLIT | admin_treasury_reward_custody | Every fee percentage is stated with its base (gross leg, fee bucket, creator bucket) and recipient, from the launch snapshot | curve and hook reads + one `FeesSwept` (curve) or `PoolFeesSwept` (hook) receipt (`rpc_state`, `receipt`) | policy change for new launches |
+| F-HOOK-SWEEP-AUTH | admin_treasury_reward_custody | Who can sweep post-graduation fees (creator or `feeSweepOperator`) AND who can rescue them (`rescuePoolFees(bytes32)` `0x5cbe8117`, hook owner), and how the internal conversion is bounded | hook reads + one `PoolFeesSwept` receipt + a `PoolFeesRescued` log search over the declared range (`rpc_state`, `receipt`, `log_decoded`) | operator or owner change |
 | D-CURVE-RESERVE | current_concentration | Curve reserve, locked excess and vault holdings are bucketed as protocol custody with the formula shown | `reservedTokens`, locker and vault balances at P1 (`rpc_state`) | graduation; vesting |
 | H-PLATFORM-SOURCE | development_disclosure | Explorer-verified source corresponds to the deployed factory, curve, hook and locker runtimes | compile-and-compare per address (`bytecode`, `source_verified`/`source_unverified`) | redeploy |
 
@@ -338,11 +368,13 @@ python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<factory> --chai
 # curve state
 python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<curve> --chain-id N --block <P1 block> \
     --call "feeBps()" --call "creatorTaxBps()" --call "phantomQuote()" --call "reservedTokens()" --call "sellableTokens()" --call "realQuoteReserve()" \
-    --call "readyToGraduate()" --call "graduated()" --call "creatorFeeRecipient()" --call "originalDeployer()" --call "pairToken()" --out packet-E-curve.json
+    --call "readyToGraduate()" --call "graduated()" --call "deployer()" --call "buybackCreatorRecipient()" --call "pairToken()" --out packet-E-curve.json
+# deployer() = CURRENT creator-fee recipient; buybackCreatorRecipient() = original deployer; the factory's
+# getLaunchedToken(address) above returns the record with both `deployer` and `creatorFeeRecipient`
 
 # hook policy and post-graduation position custody
 python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<hook> --chain-id N --block <P1 block> \
-    --call "owner()" --call "hookFeeBps()" --call "protocolFeeShareBps()" --call "buybackBurnBps()" --call "protocolFeeRecipient()" --call "feeSweepOperator()" --out packet-F-hook.json
+    --call "owner()" --call "factory()" --call "getHookPermissions()" --call "hookFeeBps()" --call "protocolFeeShareBps()" --call "buybackBurnBps()" --call "protocolFeeRecipient()" --call "feeSweepOperator()" --out packet-F-hook.json
 python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<positionManager> --chain-id N --block <P1 block> \
     --call "ownerOf(uint256):<positionId>" --call "getApproved(uint256):<positionId>" --call "getPoolAndPositionInfo(uint256):<positionId>" --out packet-B-position.json
 
@@ -351,5 +383,5 @@ python3 <skill-root>/scripts/selector_scan.py --code-file evidence/E<n>-locker-c
 python3 <skill-root>/scripts/selector_scan.py --code-file evidence/E<n>-curve-code.hex --json
 
 # PoolId of the graduated pool from the Initialize log components
-python3 <skill-root>/scripts/pool_math.py v4-pool-id --currency0 0x<lower> --currency1 0x<higher> --fee <poolFee> --tick-spacing <tickSpacing> --hooks 0x<hook>
+python3 <skill-root>/scripts/pool_math.py v4-pool-id --currency0 0x<lower> --currency1 0x<higher> --fee <poolFee from the launch record; 0 per source> --tick-spacing <tickSpacing> --hooks 0x<hook>
 ```

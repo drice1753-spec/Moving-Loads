@@ -41,7 +41,7 @@ where they went. The identity used everywhere is
 
 3. Build rows in the `reconcile.py` format (integer base units, `status` from the receipt):
    ```json
-   { "asset": {"chain_id": <chain_id>, "address": "<erc20 or 'native'>", "symbol_status": "resolved|unresolved|nonstandard", "decimals": <int>},
+   { "asset": {"chain_id": <chain_id>, "address": null, "is_native": true, "symbol": "<native currency label>", "decimals": 18},
      "opening": {"balance": "<int>", "block": <A>},
      "closing": {"balance": "<int>", "block": <P1.block_number>},
      "rows": [
@@ -54,22 +54,30 @@ where they went. The identity used everywhere is
        {"tx": "<hash>", "status": "success", "direction": "adjustment",    "amount": "<int>", "block": <b>, "counterparty": "<bridge>", "note": "bridge fee: sent - delivered, per destination receipt"}
      ] }
    ```
-   Rules that keep the identity honest:
+   That is the NATIVE file (`address: null`, `is_native: true`), the only file that accepts `gas` rows. An
+   ERC-20 file uses `"asset": {"chain_id": <chain_id>, "address": "0x<erc20>", "is_native": false, "symbol":
+   "<label>", "decimals": <int>}` with the same row shape and no `gas` rows; the tool exits 2 on any other
+   descriptor. Rules that keep the identity honest:
    - **wraps/unwraps**: `transform_out` on the native file and `transform_in` on the wrapped-asset file, same
-     tx, same amount; `reconcile.py` pairs transforms so nothing is counted twice.
+     tx, same amount; supply both files in one run (`--flows native.json weth.json`) so the tool pairs the
+     legs by tx hash across files and reports amount mismatches; a leg with no counter-leg in any supplied
+     file is still applied but warned about, so nothing is counted twice or silently dropped.
    - **burns**: `out` to `0x0`/burn address with the note; a burn is an outflow, not a disappearance.
    - **bridge legs**: `out` to the bridge on the source file; `in` from the bridge/relayer on the destination
      file (its own chain, its own pin); the fee difference is an `adjustment` on whichever side the bridge
      charges it, cited to the destination receipt.
    - **gas**: one `gas` row per transaction sent by the wallet, on the native file only, whether or not the
-     transaction succeeded.
+     transaction succeeded - always with `status: "success"`, because gas is spent even on revert. A `gas`
+     row marked `reverted` is excluded like any reverted row and the tool warns `W-GAS-ROW-REVERTED`.
    - **reverts**: the value row carries `status: "reverted"` and is excluded; never delete it, the row is the
-     evidence that the attempt happened.
+     evidence that the attempt happened; its gas is the separate success `gas` row above.
    - **swaps**: `out` of the sold asset and `in` of the bought asset are separate rows in separate files;
      never net them.
 
 4. Run the reconciliation per file and preserve the output:
    `python3 <skill-root>/scripts/reconcile.py --flows flows-<chain>-<wallet>-<asset>.json --tolerance 0 --json`
+   The tool prints `opening + inflows + adjustments = outflows + closing + unexplained` and the JSON field
+   `unexplained_delta = declared_closing - computed_closing` (sign stated on the next line).
    Exit 1 means the unexplained delta exceeds tolerance. Tolerance is `0` for ERC-20 assets with full log
    coverage; for native assets without trace coverage state the tolerance you accept and the limitation that
    forces it. Never raise the tolerance to make a file pass.
@@ -106,8 +114,9 @@ where they went. The identity used everywhere is
    scope wallets, other), outflows by class (swaps, bridges, transfers to scope wallets, exchange deposits,
    burns, gas), closing, unexplained. Fee-origin questions are answered by matching inflow rows to the
    receipt-level fee collections from `references/deep-tracks/pool-position-history.md`; an inflow from the
-   pool or position manager that matches a `Collect` row is a fee; anything else is not a fee, whatever the
-   website says.
+   pool or position manager that matches a `Collect` row whose `positions(tokenId)` resolves to a pool
+   containing the target token is a fee of this token (other pools: `fee-origin-other-pool`); anything else
+   is not a fee, whatever the website says. Wrapped-native inflows via `Deposit` follow surface G step 6.
 
 10. Never write "profit". Proceeds by asset may be stated. A profit statement requires all four: a defensible
     cost basis (allocation cost, buy cost, gas, platform and transfer fees at execution), the material flows
@@ -138,7 +147,7 @@ Evidence rows:
   "decoding_basis": "Transfer(address,address,uint256) logs to/from wallet; receipts for status and gas; Deposit/Withdrawal for wraps",
   "summary": "opening <int> + in <int> + adj <int> = out <int> + closing <int> + unexplained 0" }
 
-{ "evidence_id": "E72", "chain_id": <dest_chain_id>, "address": "<recipient>", "pin_id": "P2",
+{ "evidence_id": "E72", "chain_id": <dest_chain_id>, "address": "<recipient>", "pin_id": null,
   "tx_hash": "<dest tx>", "block_number": <block>, "evidence_type": "receipt",
   "artifact": "artifacts/receipt-<dest tx>.json", "artifact_sha256": "<sha256>",
   "query": {"method": "eth_getTransactionReceipt", "tx": "<dest tx>", "rpc_endpoint_redacted": "<redacted>"},
@@ -175,12 +184,15 @@ Finding row:
 { "finding_id": "F41", "surface": "admin_treasury_reward_custody", "severity": "info",
   "proposition": "Of <int> <asset> received by <fee_recipient> on chain <chain_id> between blocks <A> and <P1>, <int> was bridged to chain <dest_chain_id> and delivered to <recipient> at tx <dest tx>, then transferred to <exchange_deposit> (explorer-labeled deposit address) at tx <tx>; exact attribution stops there.",
   "chain_id": <dest_chain_id>, "address": "<recipient>", "pin_or_tx": "<dest tx>",
-  "evidence_ids": ["E71", "E72"], "evidence_type": "receipt", "confidence": "proven",
+  "evidence_ids": ["E72"], "evidence_type": "receipt", "confidence": "proven",
   "alternatives": "The deposit address label is unverified; the transfer proves delivery to that address only, not a sale, withdrawal or beneficiary.",
   "coverage": "all ERC-20 rows full; native internal transfers partial (L9)",
   "stale_conditions": "closing balances change after P1/P2; historical rows do not",
   "is_historical": true }
 ```
+F41 cites destination-chain evidence only: a finding that cites evidence on another chain is E-FINDING-CHAIN
+unless its surface is `external_dependencies` or an involved address is a scope `bridge` entry (then
+W-FINDING-CROSS-CHAIN). The source leg (E71) is its own finding on the source chain, pinned at P1.
 
 Unresolved questions:
 - "Whether the <int> native units unexplained on <wallet> are internal transfers (traces unavailable, L9)."
@@ -198,7 +210,8 @@ Unresolved questions:
 ## Common mistakes
 
 - Netting a swap's out and in legs into one row, or wrapping counted as both a spend and a receipt.
-- Deleting reverted rows instead of marking them; losing their gas.
+- Deleting reverted rows instead of marking them; losing their gas, or marking the gas row itself `reverted`
+  (W-GAS-ROW-REVERTED).
 - Reconciling a destination chain against the source chain's pin (E-CHAIN-UNPINNED / E-FINDING-CHAIN).
 - Matching a bridge leg on amount alone; amounts repeat, identifiers do not.
 - Treating "sent to bridge" as "arrived".

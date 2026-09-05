@@ -123,6 +123,17 @@ class RenderTests(unittest.TestCase):
         rows = ledger.ledger_rows(m)
         self.assertIn("E99 (DANGLING)", rows[1]["artifact_or_query"])
 
+    def test_string_evidence_ids_render_as_malformed_not_per_character(self):
+        m = small_manifest()
+        m["findings"][0]["evidence_ids"] = "E1"
+        rows = ledger.ledger_rows(m)
+        self.assertEqual(rows[1]["artifact_or_query"], ledger.MALFORMED_EVIDENCE_IDS)
+        self.assertEqual(rows[1]["decoding_basis"], "")
+        self.assertNotIn("DANGLING", rows[1]["artifact_or_query"])
+        res = ledger.check_manifest(m)
+        self.assertEqual(res["exit_code"], 1)
+        self.assertTrue(any(e["code"] == "E-SCHEMA" and "evidence_ids must be a list" in e["message"] for e in res["errors"]))
+
     def test_null_address_and_empty_manifest(self):
         m = small_manifest()
         m["findings"][1]["address"] = None
@@ -166,6 +177,10 @@ class CheckTests(unittest.TestCase):
         res = ledger.check_manifest(m)
         self.assertEqual(res["exit_code"], 0)
         self.assertNotIn("E-FINDING-NO-EVIDENCE", self.codes(res)[0])
+        # its own code, distinct from the empty-column warning (the finding's free-text columns are filled)
+        self.assertIn("W-LEDGER-UNKNOWN-NO-EVIDENCE", self.codes(res)[1])
+        self.assertNotIn("W-LEDGER-FIELD-EMPTY", self.codes(res)[1])
+        self.assertTrue(any(w["code"] == "W-LEDGER-UNKNOWN-NO-EVIDENCE" and w["where"] == "F2" for w in res["warnings"]))
 
     def test_dangling_evidence_id_fails(self):
         m = small_manifest()

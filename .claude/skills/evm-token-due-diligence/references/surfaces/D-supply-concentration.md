@@ -149,16 +149,16 @@ Every current-state read cites P1; the replay range is deployment block .. P1, d
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| D-SUPPLY | Supply reconciles under the model-appropriate method: mints - burns = totalSupply; derived balances sum to totalSupply; `balanceOf` confirms material derived balances; residuals explained | replay coverage row + the three checks with residuals + `totalSupply()` at P1 | `log_decoded`, `rpc_state` | any Transfer/mint/burn/rebase after P1 |
-| D-CONC | Concentration stated with denominator, exclusions and pin, on total supply and on the defined float, pool-inclusive and pool-exclusive | bucket table + metric table + definitions | `rpc_state` | any material balance change after P1 |
-| D-UNITS | Raw asset, rebasing units, shares, synthetic claims, bond/NFT shares, LP shares, custody balances, total supply and float are reported as distinct rows and never summed across | units table with a read per row | `rpc_state` | rate change, redemption rule change |
-| D-NONTRANSFER-CHANGES | Balances do not change without Transfer events; where they do, the mechanism is identified from storage diffs or traces | residual analysis + storage diffs/traces for affected addresses | `rpc_storage`, `trace`, `log_decoded` | any rebase/rewrite call after P1 |
-| D-BUCKETS | Every material balance is in exactly one bucket with on-chain basis (labels are discovery only) | per-address runtime status + classification evidence | `rpc_state`, `log_decoded`, `explorer` (discovery) | balance movement between buckets |
-| D-HOLDER-CONFIRM | Every material derived balance equals `balanceOf` at P1 | `balanceOf` reads for all material addresses + sample of small ones | `rpc_state` | any transfer after P1 |
-| D-HIST-VS-CURRENT | Launch-time concentration and current concentration are compared on identical bucket and denominator definitions | P2 (historical) pin + bucket/metric tables at P2 and P1 | `rpc_state`, `log_decoded` | new historical evidence changing the cohort |
-| D-REPLAY-COVERAGE | The replay covered deployment..P1 without gaps (or gaps are declared with limitation ids) | discovery row with windows, pagination, gap list | `log_decoded`, `manual_note` | block range advances |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| D-SUPPLY | current_concentration | Supply reconciles under the model-appropriate method: mints - burns = totalSupply; derived balances sum to totalSupply; `balanceOf` confirms material derived balances; residuals explained | replay coverage row + the three checks with residuals + `totalSupply()` at P1 | `log_decoded`, `rpc_state` | any Transfer/mint/burn/rebase after P1 |
+| D-CONC | current_concentration | Concentration stated with denominator, exclusions and pin, on total supply and on the defined float, pool-inclusive and pool-exclusive | bucket table + metric table + definitions | `rpc_state` | any material balance change after P1 |
+| D-UNITS | current_concentration | Raw asset, rebasing units, shares, synthetic claims, bond/NFT shares, LP shares, custody balances, total supply and float are reported as distinct rows and never summed across | units table with a read per row | `rpc_state` | rate change, redemption rule change |
+| D-NONTRANSFER-CHANGES | current_concentration | Balances do not change without Transfer events; where they do, the mechanism is identified from storage diffs or traces | residual analysis + storage diffs/traces for affected addresses | `rpc_storage`, `trace`, `log_decoded` | any rebase/rewrite call after P1 |
+| D-BUCKETS | current_concentration | Every material balance is in exactly one bucket with on-chain basis (labels are discovery only) | per-address runtime status + classification evidence | `rpc_state`, `log_decoded`, `explorer` (discovery) | balance movement between buckets |
+| D-HOLDER-CONFIRM | current_concentration | Every material derived balance equals `balanceOf` at P1 | `balanceOf` reads for all material addresses + sample of small ones | `rpc_state` | any transfer after P1 |
+| D-HIST-VS-CURRENT | current_concentration | Launch-time concentration and current concentration are compared on identical bucket and denominator definitions | P2 (historical) pin + bucket/metric tables at P2 and P1 | `rpc_state`, `log_decoded` | new historical evidence changing the cohort |
+| D-REPLAY-COVERAGE | current_concentration | The replay covered deployment..P1 without gaps (or gaps are declared with limitation ids) | discovery row with windows, pagination, gap list | `log_decoded`, `manual_note` | block range advances |
 
 ## Common false positives and negatives
 

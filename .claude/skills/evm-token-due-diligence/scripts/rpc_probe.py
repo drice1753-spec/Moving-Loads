@@ -7,24 +7,41 @@ material. The RPC URL is redacted in every output field.
 
 Flow (each step's failure becomes a coverage limitation, never a token finding):
   1. eth_chainId (always live, never from cache) -> observed chain; compared with --chain-id.
-     A mismatch aborts the reads: a same-symbol token on another chain is not the target.
+     identity.status: MATCH | OBSERVED_ONLY (no --chain-id given; confirm with the user before
+     relying on the packet) | CHAIN_MISMATCH | UNVERIFIED. A mismatch aborts the reads: a
+     same-symbol token on another chain is not the target. It is recorded under `identity`
+     (status, requested, observed, detail), NOT as a limitation: it is an identity failure, not
+     a coverage problem. The client and its response cache are bound to the observed chain here
+     (ddcore.RpcClient.set_chain_id); a --cache file recorded for another chain is ignored for
+     the run (packet `cache.status` = "ignored", warning on stderr).
   2. eth_getBlockByNumber(--block) -> pin P1 in manifest pin format with the FULL captured header.
      Every later read uses the pinned block number hex, never "latest".
-  3. eth_getCode -> code hash (keccak256), size, EIP-1167 minimal-proxy detection.
+  3. eth_getCode -> code hash (keccak256), size, runtime_status contract|eoa|unknown, EIP-1167
+     minimal-proxy detection. A non-string or non-hex result is a limitation (runtime_status
+     "unknown"), never "not a contract".
   4. eth_getStorageAt for the EIP-1967 implementation/admin/beacon slots and the EIP-1822 logic
-     slot -> proxy status; implementation code hash.
+     slot -> proxy status; implementation code hash. Any failed or malformed slot read leaves
+     proxy.status "unknown" with a limitation, never "not_proxy".
   5. eth_call name()/symbol()/decimals()/totalSupply() -> metadata with resolved/nonstandard/
      unresolved statuses and raw return data preserved.
   6. eth_call owner()/getOwner()/paused() plus each --call -> probes with decoded candidates.
-     A revert is a FACT about the contract (status "reverted"), not a limitation.
+     A revert is a FACT about the contract (status "reverted"), not a limitation; reverts at the
+     pin are cached like results.
+  For an `eoa` target (no code at the pin) steps 5-6 still run, but every metadata entry is
+  `unresolved` and every probe carries the qualifier "no runtime code at this address at the
+  pin; return data cannot come from this address" so a lying or misrouted endpoint is visible.
 
 Usage:
-  python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x.. [--chain-id N] [--block latest|N]
-        [--call "owner()"]... [--cache FILE] [--out packet.json] [--timeout S] [--json]
+  python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x.. [--chain-id N]
+        [--block latest|safe|finalized|N] [--call "owner()"]... [--cache FILE] [--out packet.json]
+        [--timeout S] [--retries N] [--json]
 
   --rpc falls back to the EVM_DD_RPC_URL environment variable.
+  --block: a floating tag (latest|safe|finalized) is resolved to a number by the pin and never
+  cached; N is decimal or 0x hex. Prefer `finalized` where the chain supports it.
   --call accepts "sig()" (no arguments), "sig(type,..):arg,.." with static argument types only
-  (address, bool, bytes32, uintN, intN), or raw calldata hex.
+  (address, bool, bytes32, uintN, intN; integer arguments must fit the declared width), or raw
+  calldata hex.
 
 Exit codes: 0 packet written (coverage complete or partial), 1 fatal coverage failure (chain id
 or pin could not be obtained; the packet is still written with limitations), 2 usage error,
@@ -59,12 +76,14 @@ from ddcore import (  # noqa: E402
     RpcCoverageError,
     RpcPolicyError,
     decode_abi_string,
+    decode_abi_string_detail,
     decode_uint,
     encode_static,
     hex_to_int,
     int_to_hex,
     iso_utc,
     keccak256_hex,
+    normalize_address,
     selector,
     to_checksum_address,
     validate_address,
@@ -114,7 +133,9 @@ LIMITATION_KINDS = {
     "rpc_timeout", "rpc_rate_limit", "rpc_pruned", "rpc_error", "dns_failure", "api_unavailable",
     "explorer_unavailable", "source_unavailable", "out_of_scope", "other",
 }
-_NOT_RETRIED_KINDS = ("rpc_error", "auth", "malformed_response")
+_NOT_RETRIED_KINDS = ddcore.NON_RETRIED_KINDS
+IDENTITY_STATUSES = ("MATCH", "OBSERVED_ONLY", "CHAIN_MISMATCH", "UNVERIFIED")
+EOA_QUALIFIER = "no runtime code at this address at the pin; return data cannot come from this address"
 
 # EIP-1167 minimal proxy runtime: 363d3d373d3d3d363d73 <20-byte impl> 5af43d82803e903d91602b57fd5bf3
 MINIMAL_PROXY_PREFIX = bytes.fromhex("363d3d373d3d3d363d73")
@@ -126,8 +147,8 @@ _LOWER_WORD_RE = re.compile(r"^[a-z]+$")
 _FORBIDDEN_FLAGS = ("--private-key", "--privatekey", "--mnemonic", "--seed", "--keystore", "--secret")
 _RAW_CALLDATA_RE = re.compile(r"^0x[0-9a-fA-F]{8}(?:[0-9a-fA-F]{64})*$")
 _SIG_RE = re.compile(r"^([A-Za-z_$][A-Za-z0-9_$]*)\(([^()]*)\)$")
-_REVERT_MARKERS = ("revert", "execution error", "vm exception", "invalid opcode", "out of gas",
-                   "invalid jump", "stack underflow", "stack overflow")
+_INT_TYPE_RE = re.compile(r"^(u?int)([0-9]+)?$")
+_REVERT_MARKERS = ddcore.EXECUTION_FAILURE_MARKERS
 
 
 # ------------------------------------------------------------------------------------
@@ -194,6 +215,8 @@ def classify_call_failure(err: RpcCoverageError) -> Optional[str]:
     contract at the pin); None when the failure is an infrastructure/coverage problem."""
     if err.kind != "rpc_error":
         return None
+    if getattr(err, "execution_failure", False):
+        return "reverted"
     low = (err.message or "").lower()
     if low.startswith("rpc error 3:"):
         return "reverted"
@@ -213,22 +236,25 @@ def normalize_block_arg(text: str) -> str:
     raise ValueError(f"--block must be one of {'/'.join(_BLOCK_TAGS_ACCEPTED)} or a block number, got {text!r}")
 
 
-def _abi_kind(type_name: str) -> str:
+def _abi_kind(type_name: str) -> tuple[str, int]:
+    """(ddcore encode kind, bit width). Widths are validated so calldata never carries an impossible value."""
     t = type_name.strip()
     if t == "address":
-        return "address"
+        return "address", 160
     if t == "bool":
-        return "bool"
+        return "bool", 8
     if t == "bytes32":
-        return "bytes32"
-    if re.match(r"^uint(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?$", t):
-        return "uint"
-    if re.match(r"^int(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?$", t):
-        return "int"
+        return "bytes32", 256
+    m = _INT_TYPE_RE.match(t)
+    if m:
+        bits = int(m.group(2)) if m.group(2) else 256
+        if bits % 8 or not 8 <= bits <= 256:
+            raise ValueError(f"unsupported integer width in --call type {t!r}: N must be a multiple of 8 in 8..256")
+        return ("uint" if m.group(1) == "uint" else "int"), bits
     raise ValueError(f"unsupported argument type {t!r} in --call (static types only: address, bool, bytes32, uintN, intN)")
 
 
-def _coerce_arg(kind: str, text: str) -> Any:
+def _coerce_arg(kind: str, bits: int, text: str) -> Any:
     t = text.strip()
     if kind == "address":
         ok, why = validate_address(t)
@@ -246,7 +272,17 @@ def _coerce_arg(kind: str, text: str) -> Any:
         if len(b) != 32:
             raise ValueError("--call bytes32 argument must be 32 bytes of hex")
         return b
-    return int(t, 0)
+    try:
+        v = int(t, 16) if t.lower().startswith(("0x", "-0x")) else int(t, 10)
+    except ValueError:
+        raise ValueError(f"--call {kind}{bits} argument {t!r} is not an integer (decimal or 0x hex)")
+    if kind == "uint":
+        if not 0 <= v < (1 << bits):
+            raise ValueError(f"--call uint{bits} argument {v} is out of range [0, 2**{bits} - 1]")
+    else:
+        if not -(1 << (bits - 1)) <= v < (1 << (bits - 1)):
+            raise ValueError(f"--call int{bits} argument {v} is out of range [-2**{bits - 1}, 2**{bits - 1} - 1]")
+    return v
 
 
 def parse_call_spec(spec: str) -> tuple[str, str]:
@@ -263,7 +299,10 @@ def parse_call_spec(spec: str) -> tuple[str, str]:
     args = [a for a in argtext.split(",")] if argtext.strip() else []
     if len(types) != len(args):
         raise ValueError(f"--call {sig} expects {len(types)} argument(s), got {len(args)}; give them after a colon, e.g. balanceOf(address):0x...")
-    items = [(_abi_kind(t), _coerce_arg(_abi_kind(t), a)) for t, a in zip(types, args)]
+    items = []
+    for t, a in zip(types, args):
+        kind, bits = _abi_kind(t)
+        items.append((kind, _coerce_arg(kind, bits, a)))
     data = selector(sig) + encode_static(items).hex()
     label = sig if not args else f"{sig}:{','.join(a.strip() for a in args)}"
     return label, data
@@ -324,6 +363,8 @@ class Probe:
         self.limitations: list[dict] = []
         self.failed_calls: list[dict] = []
         self.pinned_hex: Optional[str] = None
+        self.no_code = False          # True once eth_getCode proved the target has no runtime code at the pin
+        self.cache_warning: Optional[str] = None
         self.packet = self._skeleton()
 
     # ----- packet skeleton ----------------------------------------------------------
@@ -343,7 +384,8 @@ class Probe:
                 "rpc_endpoint_redacted": self.client.redacted_url,
                 "client_version": None,
             },
-            "identity": {"status": "UNVERIFIED", "detail": "chain id not yet observed"},
+            "identity": self._identity("UNVERIFIED", None, "chain id not yet observed"),
+            "cache": {"status": "none" if self.client.cache is None else "pending", "chain_id": None, "note": None},
             "pin": None,
             "pinned_block_hex": None,
             "runtime": None,
@@ -383,6 +425,33 @@ class Probe:
             ],
         }
 
+    def _identity(self, status: str, observed: Optional[int], detail: str) -> dict:
+        assert status in IDENTITY_STATUSES
+        return {"status": status, "requested": self.requested_chain_id, "observed": observed, "detail": detail}
+
+    def _bind_cache(self, observed: int) -> dict:
+        """Bind client + cache to the live chain id. A cache file recorded for another chain is ignored
+        for this run (nothing read from or written to it): that is the only way a shared file cannot
+        serve chain-A facts as chain-B facts."""
+        info: dict[str, Any] = {"status": "none", "chain_id": observed, "note": None}
+        if self.client.cache is None:
+            self.client.set_chain_id(observed)
+            return info
+        try:
+            self.client.set_chain_id(observed)
+        except RpcCoverageError as e:
+            self.client.cache = None
+            self.client.set_chain_id(observed)
+            info["status"] = "ignored"
+            info["note"] = f"{e.message}; nothing was read from or written to it during this run"
+            self.cache_warning = info["note"]
+            return info
+        info["status"] = "used"
+        discarded = getattr(self.client.cache, "discarded", None)
+        if discarded:
+            info["note"] = discarded
+        return info
+
     # ----- failed calls / limitations ------------------------------------------------
     def record_failed(self, err: RpcCoverageError, outcome: str, limitation_id: Optional[str] = None) -> None:
         """ddcore records only successful calls in client.calls; keep failed ones (reverts are
@@ -390,7 +459,7 @@ class Probe:
         self.failed_calls.append({
             "method": err.method,
             "params": err.params,
-            "cached": False,
+            "cached": bool(getattr(err, "cached", False)),
             "outcome": outcome,
             "error_kind": err.kind,
             "error_message": err.message,
@@ -414,8 +483,8 @@ class Probe:
         self.limitations.append(lim)
         return lid
 
-    def _finish(self, code: int) -> tuple[dict, int]:
-        self.packet["coverage_status"] = "complete" if not self.limitations else "partial"
+    def _finish(self, code: int, coverage: Optional[str] = None) -> tuple[dict, int]:
+        self.packet["coverage_status"] = coverage or ("complete" if not self.limitations else "partial")
         return self.packet, code
 
     # ----- steps --------------------------------------------------------------------
@@ -425,17 +494,21 @@ class Probe:
         try:
             chain_hex = live_call(self.client, "eth_chainId", [])
             observed = hex_to_int(chain_hex)
+            if observed < 1:
+                raise ValueError(f"chain id {observed} is not a positive integer")
         except RpcCoverageError as e:
             self.limit(e, "step 1 (eth_chainId)", CORE_CHECK_IDS, (self.address,))
-            p["identity"] = {"status": "UNVERIFIED", "detail": "chain id could not be read from the endpoint; nothing else was attempted"}
+            p["identity"] = self._identity("UNVERIFIED", None, "chain id could not be read from the endpoint; nothing else was attempted")
             return self._finish(EXIT_FATAL)
         except (ValueError, TypeError) as e:
             err = RpcCoverageError("rpc_error", f"eth_chainId returned a non-quantity: {e}", "eth_chainId", [])
             self.limit(err, "step 1 (eth_chainId)", CORE_CHECK_IDS, (self.address,))
-            p["identity"] = {"status": "UNVERIFIED", "detail": "chain id response was malformed; nothing else was attempted"}
+            p["identity"] = self._identity("UNVERIFIED", None, "chain id response was malformed; nothing else was attempted")
             return self._finish(EXIT_FATAL)
         p["observed"]["chain_id"] = observed
         p["observed"]["rpc_chain_id_hex"] = chain_hex if isinstance(chain_hex, str) else int_to_hex(observed)
+        # bind the client and its cache to the LIVE chain id before any cacheable read
+        p["cache"] = self._bind_cache(observed)
 
         try:  # optional, non-material
             cv = live_call(self.client, "web3_clientVersion", [])
@@ -445,21 +518,19 @@ class Probe:
             p["observed"]["client_version_note"] = f"web3_clientVersion unavailable ({e.kind}); non-material, not recorded as a limitation"
 
         if self.requested_chain_id is None:
-            p["identity"] = {
-                "status": "OBSERVED_ONLY",
-                "detail": f"no --chain-id supplied; observed chain {observed} adopted as the target chain. Confirm it is the chain the user meant before relying on this packet.",
-            }
+            p["identity"] = self._identity(
+                "OBSERVED_ONLY", observed,
+                f"no --chain-id supplied; observed chain {observed} adopted as the target chain. Confirm it is the chain the user meant before relying on this packet.")
         elif self.requested_chain_id == observed:
-            p["identity"] = {"status": "MATCH", "detail": f"requested chain {self.requested_chain_id} equals RPC-observed chain {observed}"}
+            p["identity"] = self._identity("MATCH", observed, f"requested chain {self.requested_chain_id} equals RPC-observed chain {observed}")
         else:
-            p["identity"] = {
-                "status": "CHAIN_MISMATCH",
-                "detail": (f"requested chain {self.requested_chain_id} but RPC reports {observed}: do not proceed; "
-                           f"a same-symbol token on another chain is not the target. No reads were made at the address."),
-            }
-            err = RpcCoverageError("other", f"probe aborted: endpoint is on chain {observed}, requested chain {self.requested_chain_id}", "eth_chainId", [])
-            self.limit(err, "step 1 (identity)", CORE_CHECK_IDS, (self.address,))
-            return self._finish(EXIT_CHAIN_MISMATCH)
+            # identity failure, not a coverage limitation: nothing is added to limitations
+            p["identity"] = self._identity(
+                "CHAIN_MISMATCH", observed,
+                f"requested chain {self.requested_chain_id} but RPC reports {observed}: do not proceed; "
+                f"a same-symbol token on another chain is not the target. No reads were made at the address; "
+                f"this is an identity failure, not a coverage limitation.")
+            return self._finish(EXIT_CHAIN_MISMATCH, coverage="partial")
 
         # (2) pin
         try:
@@ -479,19 +550,26 @@ class Probe:
             err = RpcCoverageError("rpc_error", f"block header quantities malformed: {e}", "eth_getBlockByNumber", [self.block, False])
             self.limit(err, "step 2 (pin)", CORE_CHECK_IDS, (self.address,))
             return self._finish(EXIT_FATAL)
+        captured_at = self.now()
+        try:
+            ts_utc = iso_utc(ts)
+            captured_utc = iso_utc(captured_at)
+        except (ValueError, OverflowError, OSError) as e:  # ddcore.TimestampRangeError is both
+            err = RpcCoverageError("rpc_error", f"block header timestamp out of range: {e}", "eth_getBlockByNumber", [self.block, False])
+            self.limit(err, "step 2 (pin)", CORE_CHECK_IDS, (self.address,))
+            return self._finish(EXIT_FATAL)
         if self.block not in _BLOCK_TAGS_ACCEPTED and int_to_hex(block_number) != self.block:
             err = RpcCoverageError("rpc_error", f"requested block {self.block} but header number is {int_to_hex(block_number)}", "eth_getBlockByNumber", [self.block, False])
             self.limit(err, "step 2 (pin)", CORE_CHECK_IDS, (self.address,))
         self.pinned_hex = int_to_hex(block_number)
-        captured_at = self.now()
         p["pin"] = {
             "pin_id": PIN_ID,
             "chain_id": observed,
             "block_number": block_number,
             "block_hash": header["hash"],
             "timestamp_unix": ts,
-            "timestamp_utc": iso_utc(ts),
-            "captured_at_utc": iso_utc(captured_at),
+            "timestamp_utc": ts_utc,
+            "captured_at_utc": captured_utc,
             "rpc_method": "eth_getBlockByNumber",
             "rpc_endpoint_redacted": self.client.redacted_url,
             "captured_header": header,
@@ -517,6 +595,7 @@ class Probe:
             "code_hash": None,
             "code_size": None,
             "is_contract": None,
+            "runtime_status": "unknown",  # manifest vocabulary: contract | eoa | unknown
             "pin_id": PIN_ID,
             "proxy": {
                 "status": "unknown",
@@ -530,25 +609,36 @@ class Probe:
             },
         }
         p["runtime"] = runtime
+        code_params = [normalize_address(self.address), self.pinned_hex]
         try:
             code_hex = self.client.code(self.address, self.pinned_hex)
-            code = hex_to_bytes(code_hex if isinstance(code_hex, str) else "0x")
         except RpcCoverageError as e:
             lid = self.limit(e, "step 3 (eth_getCode)", TOKEN_CONTROL_CHECKS, (self.address,))
-            runtime["proxy"]["basis"] = f"runtime code unavailable (limitation {lid}); proxy status unknown"
+            runtime["proxy"]["basis"] = f"runtime code unavailable (limitation {lid}); runtime_status and proxy status unknown"
             return
-        except ValueError as e:
-            err = RpcCoverageError("rpc_error", f"eth_getCode returned non-hex data: {e}", "eth_getCode", [self.address, self.pinned_hex])
+        if not isinstance(code_hex, str):
+            # a null or non-string result is a malformed response, never "no code"
+            err = RpcCoverageError("rpc_error", f"eth_getCode returned a non-string result ({type(code_hex).__name__})", "eth_getCode", code_params)
             lid = self.limit(err, "step 3 (eth_getCode)", TOKEN_CONTROL_CHECKS, (self.address,))
-            runtime["proxy"]["basis"] = f"runtime code unavailable (limitation {lid}); proxy status unknown"
+            runtime["proxy"]["basis"] = f"runtime code unavailable (limitation {lid}: non-string result); runtime_status and proxy status unknown"
+            return
+        try:
+            code = hex_to_bytes(code_hex)
+        except ValueError as e:
+            err = RpcCoverageError("rpc_error", f"eth_getCode returned non-hex data: {e}", "eth_getCode", code_params)
+            lid = self.limit(err, "step 3 (eth_getCode)", TOKEN_CONTROL_CHECKS, (self.address,))
+            runtime["proxy"]["basis"] = f"runtime code unavailable (limitation {lid}); runtime_status and proxy status unknown"
             return
         runtime["code_hash"] = keccak256_hex(code)
         runtime["code_size"] = len(code)
         runtime["is_contract"] = len(code) > 0
+        runtime["runtime_status"] = "contract" if code else "eoa"
         proxy = runtime["proxy"]
         if not code:
+            self.no_code = True
             proxy["status"] = "not_proxy"
-            proxy["basis"] = "no runtime code at the pinned block (EOA, self-destructed, or not yet deployed); storage slots not read"
+            proxy["basis"] = ("no runtime code at the pinned block (EOA, self-destructed, or not yet deployed); storage slots not read; "
+                              "metadata and probe calls below are qualified: their return data cannot come from this address")
             return
 
         minimal_impl = detect_minimal_proxy(code)
@@ -563,8 +653,21 @@ class Probe:
                 self.limit(e, f"step 4 (eth_getStorageAt {name})", ["A-UPGRADE"], (self.address,))
                 failed.append(name)
                 continue
-            proxy["slots_read"][slot] = v if isinstance(v, str) else json.dumps(v)
-            slot_values[name] = v if isinstance(v, str) else None
+            slot_params = [normalize_address(self.address), slot, self.pinned_hex]
+            if not isinstance(v, str):
+                err = RpcCoverageError("rpc_error", f"eth_getStorageAt returned a non-string result ({type(v).__name__})", "eth_getStorageAt", slot_params)
+                self.limit(err, f"step 4 (eth_getStorageAt {name})", ["A-UPGRADE"], (self.address,))
+                failed.append(name)
+                continue
+            try:
+                hex_to_bytes(v)
+            except ValueError:
+                err = RpcCoverageError("rpc_error", "eth_getStorageAt returned non-hex data", "eth_getStorageAt", slot_params)
+                self.limit(err, f"step 4 (eth_getStorageAt {name})", ["A-UPGRADE"], (self.address,))
+                failed.append(name)
+                continue
+            proxy["slots_read"][slot] = v
+            slot_values[name] = v
         impl = word_to_address(slot_values.get("eip1967_implementation"))
         admin = word_to_address(slot_values.get("eip1967_admin"))
         beacon = word_to_address(slot_values.get("eip1967_beacon"))
@@ -596,10 +699,12 @@ class Probe:
             basis_parts.append("EIP-1822 (UUPS PROXIABLE) logic slot is non-zero at the pin")
         elif failed:
             proxy["status"] = "unknown"
-            basis_parts.append(f"proxy slots could not all be read ({', '.join(failed)}); see limitations")
+            basis_parts.append(f"proxy slots could not all be read ({', '.join(failed)}); see limitations; never treat this as not_proxy")
         else:
             proxy["status"] = "not_proxy"
             basis_parts.append("no known proxy slots set; custom proxies possible: inspect selectors")
+        if failed and proxy["status"] not in ("unknown", "not_proxy"):
+            basis_parts.append(f"some proxy slots could not be read ({', '.join(failed)}); see limitations")
         if admin is not None:
             basis_parts.append("EIP-1967 admin slot is non-zero (transparent-proxy style admin)")
         if proxy["status"] != "not_proxy":
@@ -608,8 +713,12 @@ class Probe:
 
         target_impl = proxy.get("implementation")
         if target_impl:
+            impl_params = [normalize_address(target_impl), self.pinned_hex]
             try:
-                impl_code = hex_to_bytes(self.client.code(target_impl, self.pinned_hex))
+                impl_hex = self.client.code(target_impl, self.pinned_hex)
+                if not isinstance(impl_hex, str):
+                    raise ValueError(f"non-string result ({type(impl_hex).__name__})")
+                impl_code = hex_to_bytes(impl_hex)
                 proxy["implementation_code_hash"] = keccak256_hex(impl_code)
                 proxy["implementation_code_size"] = len(impl_code)
                 if not impl_code:
@@ -617,8 +726,10 @@ class Probe:
             except RpcCoverageError as e:
                 lid = self.limit(e, "step 4 (eth_getCode implementation)", ["A-UPGRADE"], (target_impl,))
                 proxy["basis"] += f"; implementation code hash unavailable (limitation {lid})"
-            except ValueError:
-                proxy["basis"] += "; implementation code response was not hex"
+            except ValueError as e:
+                err = RpcCoverageError("rpc_error", f"eth_getCode(implementation) returned malformed data: {e}", "eth_getCode", impl_params)
+                lid = self.limit(err, "step 4 (eth_getCode implementation)", ["A-UPGRADE"], (target_impl,))
+                proxy["basis"] += f"; implementation code hash unavailable (limitation {lid})"
 
     def _beacon_implementation(self, beacon: str) -> Optional[str]:
         assert self.pinned_hex is not None
@@ -641,66 +752,83 @@ class Probe:
         meta: dict[str, dict] = {}
         p["metadata"] = meta
         for key, sig, kind in METADATA_FIELDS:
-            sel = selector(sig)
-            entry: dict[str, Any] = {
-                "value": None,
-                "status": "unresolved",
-                "source": f"eth_call {sig} ({sel}) at {PIN_ID}",
-                "reason": None,
-                "selector": sel,
-                "raw": None,
-            }
+            entry = self._metadata_entry(sig, kind)
+            if self.no_code:
+                # an EOA cannot answer: keep the raw bytes as evidence of what the endpoint said, but the
+                # value is unresolved and the contradiction is spelled out
+                decoded = entry["value"]
+                entry["qualifier"] = EOA_QUALIFIER
+                entry["value"] = None
+                entry["status"] = "unresolved"
+                entry["reason"] = EOA_QUALIFIER + (f" (endpoint returned data that decodes to {decoded!r}: inconsistent with an address without code)"
+                                                   if decoded is not None else "")
             meta[key] = entry
-            try:
-                raw = self.client.eth_call(self.address, sel, self.pinned_hex)
-            except RpcCoverageError as e:
-                if classify_call_failure(e) == "reverted":
-                    self.record_failed(e, "reverted")
-                    entry["reason"] = f"call reverted: {e.message}"
-                else:
-                    lid = self.limit(e, f"step 5 (eth_call {sig})", [], (self.address,))
-                    entry["reason"] = f"rpc failure, see limitation {lid}"
-                continue
-            if not isinstance(raw, str):
-                entry["reason"] = "return data was not a hex string"
-                continue
-            entry["raw"] = raw
-            try:
-                b = hex_to_bytes(raw)
-            except ValueError:
-                entry["reason"] = "return data was not valid hex"
-                continue
-            if not b:
-                entry["reason"] = "empty return (no code at address, fallback returned nothing, or function absent)"
-                continue
-            if kind == "string":
-                value, status = decode_abi_string(b)
-                entry["value"] = value
-                entry["status"] = status
-                if status == "nonstandard":
-                    entry["reason"] = "returned a single 32-byte word (bytes32-style), not an ABI string; value decoded as UTF-8 text"
-                elif status == "unresolved":
-                    entry["reason"] = "return data could not be decoded as an ABI string or bytes32 text"
-                continue
-            # uint kinds
-            if len(b) < 32:
-                entry["reason"] = f"return data is {len(b)} bytes, shorter than one ABI word"
-                continue
-            v = decode_uint(b)
-            if kind == "uint8":
-                entry["value"] = v
-                if len(b) != 32 or v > 255:
-                    entry["status"] = "nonstandard"
-                    entry["reason"] = "decimals() did not return a single uint8-range word"
-                else:
-                    entry["status"] = "resolved"
+
+    def _metadata_entry(self, sig: str, kind: str) -> dict:
+        assert self.pinned_hex is not None
+        sel = selector(sig)
+        entry: dict[str, Any] = {
+            "value": None,
+            "status": "unresolved",
+            "source": f"eth_call {sig} ({sel}) at {PIN_ID}",
+            "reason": None,
+            "selector": sel,
+            "raw": None,
+            "qualifier": None,
+        }
+        call_params = [{"to": normalize_address(self.address), "data": sel}, self.pinned_hex]
+        try:
+            raw = self.client.eth_call(self.address, sel, self.pinned_hex)
+        except RpcCoverageError as e:
+            if classify_call_failure(e) == "reverted":
+                self.record_failed(e, "reverted")
+                entry["reason"] = f"call reverted: {e.message}"
             else:
-                entry["value"] = str(v)  # decimal string: base units may exceed 2**53
-                if len(b) != 32:
-                    entry["status"] = "nonstandard"
-                    entry["reason"] = "totalSupply() returned more than one word; first word kept"
-                else:
-                    entry["status"] = "resolved"
+                lid = self.limit(e, f"step 5 (eth_call {sig})", [], (self.address,))
+                entry["reason"] = f"rpc failure, see limitation {lid}"
+            return entry
+        if not isinstance(raw, str):
+            err = RpcCoverageError("rpc_error", f"eth_call returned a non-string result ({type(raw).__name__})", "eth_call", call_params)
+            lid = self.limit(err, f"step 5 (eth_call {sig})", [], (self.address,))
+            entry["reason"] = f"malformed response (non-string result), see limitation {lid}"
+            return entry
+        entry["raw"] = raw
+        try:
+            b = hex_to_bytes(raw)
+        except ValueError:
+            err = RpcCoverageError("rpc_error", "eth_call returned non-hex data", "eth_call", call_params)
+            lid = self.limit(err, f"step 5 (eth_call {sig})", [], (self.address,))
+            entry["reason"] = f"malformed response (non-hex return data), see limitation {lid}"
+            return entry
+        if not b:
+            entry["reason"] = "empty return (no code at address, fallback returned nothing, or function absent)"
+            return entry
+        if kind == "string":
+            value, status, reason = decode_abi_string_detail(b)
+            entry["value"] = value
+            entry["status"] = status
+            entry["reason"] = reason
+            return entry
+        # uint kinds
+        if len(b) < 32:
+            entry["reason"] = f"return data is {len(b)} bytes, shorter than one ABI word"
+            return entry
+        v = decode_uint(b)
+        if kind == "uint8":
+            entry["value"] = v
+            if len(b) != 32 or v > 255:
+                entry["status"] = "nonstandard"
+                entry["reason"] = "decimals() did not return a single uint8-range word"
+            else:
+                entry["status"] = "resolved"
+        else:
+            entry["value"] = str(v)  # decimal string: base units may exceed 2**53
+            if len(b) != 32:
+                entry["status"] = "nonstandard"
+                entry["reason"] = "totalSupply() returned more than one word; first word kept"
+            else:
+                entry["status"] = "resolved"
+        return entry
 
     def _step_probes(self) -> None:
         p = self.packet
@@ -715,46 +843,61 @@ class Probe:
             seen.add(data)
             specs.append((label, data, []))
         for label, data, checks in specs:
-            entry: dict[str, Any] = {
-                "name": label,
-                "selector": data[:10],
-                "calldata": data,
-                "raw": None,
-                "decoded_candidates": {"uint": None, "address": None, "bool": None, "string": None},
-                "status": None,
-                "detail": None,
-            }
+            entry = self._probe_entry(label, data, checks)
+            if self.no_code:
+                entry["qualifier"] = EOA_QUALIFIER
+                if entry["status"] in ("ok", "reverted"):
+                    entry["detail"] = f"INCONSISTENT: {EOA_QUALIFIER}; {entry['detail']}"
             p["probes"].append(entry)
-            try:
-                raw = self.client.eth_call(self.address, data, self.pinned_hex)
-            except RpcCoverageError as e:
-                if classify_call_failure(e) == "reverted":
-                    self.record_failed(e, "reverted")
-                    entry["status"] = "reverted"
-                    entry["detail"] = f"node reported execution failure: {e.message} (a fact about the contract at {PIN_ID}, not a limitation)"
-                else:
-                    lid = self.limit(e, f"step 6 (eth_call {label})", checks, (self.address,))
-                    entry["status"] = "unavailable"
-                    entry["detail"] = f"rpc failure, see limitation {lid}"
-                continue
-            if not isinstance(raw, str):
+
+    def _probe_entry(self, label: str, data: str, checks: list[str]) -> dict:
+        assert self.pinned_hex is not None
+        entry: dict[str, Any] = {
+            "name": label,
+            "selector": data[:10],
+            "calldata": data,
+            "raw": None,
+            "decoded_candidates": {"uint": None, "address": None, "bool": None, "string": None},
+            "status": None,
+            "detail": None,
+            "qualifier": None,
+        }
+        call_params = [{"to": normalize_address(self.address), "data": data}, self.pinned_hex]
+        try:
+            raw = self.client.eth_call(self.address, data, self.pinned_hex)
+        except RpcCoverageError as e:
+            if classify_call_failure(e) == "reverted":
+                self.record_failed(e, "reverted")
+                entry["status"] = "reverted"
+                entry["detail"] = f"node reported execution failure: {e.message} (a fact about the contract at {PIN_ID}, not a limitation)"
+            else:
+                lid = self.limit(e, f"step 6 (eth_call {label})", checks, (self.address,))
                 entry["status"] = "unavailable"
-                entry["detail"] = "return data was not a hex string"
-                continue
-            entry["raw"] = raw
-            try:
-                b = hex_to_bytes(raw)
-            except ValueError:
-                entry["status"] = "unavailable"
-                entry["detail"] = "return data was not valid hex"
-                continue
-            if not b:
-                entry["status"] = "empty"
-                entry["detail"] = "empty return: selector not implemented, fallback returned nothing, or no code"
-                continue
-            entry["status"] = "ok"
-            entry["decoded_candidates"] = decode_candidates(raw)
-            entry["detail"] = "decoded_candidates are alternative static readings; choose by ABI, do not trust the value as a claim"
+                entry["detail"] = f"rpc failure, see limitation {lid}"
+            return entry
+        if not isinstance(raw, str):
+            err = RpcCoverageError("rpc_error", f"eth_call returned a non-string result ({type(raw).__name__})", "eth_call", call_params)
+            lid = self.limit(err, f"step 6 (eth_call {label})", checks, (self.address,))
+            entry["status"] = "unavailable"
+            entry["detail"] = f"malformed response (non-string result), see limitation {lid}"
+            return entry
+        entry["raw"] = raw
+        try:
+            b = hex_to_bytes(raw)
+        except ValueError:
+            err = RpcCoverageError("rpc_error", "eth_call returned non-hex data", "eth_call", call_params)
+            lid = self.limit(err, f"step 6 (eth_call {label})", checks, (self.address,))
+            entry["status"] = "unavailable"
+            entry["detail"] = f"malformed response (non-hex return data), see limitation {lid}"
+            return entry
+        if not b:
+            entry["status"] = "empty"
+            entry["detail"] = "empty return: selector not implemented, fallback returned nothing, or no code"
+            return entry
+        entry["status"] = "ok"
+        entry["decoded_candidates"] = decode_candidates(raw)
+        entry["detail"] = "decoded_candidates are alternative static readings; choose by ABI, do not trust the value as a claim"
+        return entry
 
 
 def build_packet(client: RpcClient, address: str, requested_chain_id: Optional[int] = None,
@@ -788,12 +931,15 @@ def summarize(packet: dict, out_path: Optional[str]) -> str:
     lines.append(f"  requested : chain {req['chain_id'] if req['chain_id'] is not None else '(none given)'}  address {req['address_checksum']}")
     lines.append(f"  observed  : chain {obs['chain_id']} ({obs['rpc_chain_id_hex']})  endpoint {obs['rpc_endpoint_redacted']}  client {_safe(obs.get('client_version'))}")
     lines.append(f"  identity  : {ident['status']} - {ident['detail']}")
+    cache = packet.get("cache") or {}
+    if cache.get("status") not in (None, "none"):
+        lines.append(f"  cache     : {cache.get('status')}" + (f" - {cache.get('note')}" if cache.get("note") else ""))
     pin = packet.get("pin")
     if pin:
         lines.append(f"  pin {pin['pin_id']}    : block {pin['block_number']}  hash {pin['block_hash']}  time {pin['timestamp_utc']}  captured {pin['captured_at_utc']}")
     rt = packet.get("runtime")
     if rt:
-        lines.append(f"  runtime   : code_hash {rt['code_hash']}  size {rt['code_size']}  contract={rt['is_contract']}")
+        lines.append(f"  runtime   : runtime_status={rt.get('runtime_status')}  code_hash {rt['code_hash']}  size {rt['code_size']}  contract={rt['is_contract']}")
         px = rt["proxy"]
         lines.append(f"  proxy     : {px['status']}  implementation={px['implementation']}  impl_code_hash={px['implementation_code_hash']}  admin={px['admin']}  beacon={px['beacon']}")
         if px.get("basis"):
@@ -840,11 +986,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--rpc", help=f"JSON-RPC HTTP(S) endpoint (fallback: env {ENV_RPC}); redacted in all output")
     ap.add_argument("--address", help="target contract address (strict; mixed case must satisfy EIP-55)")
     ap.add_argument("--chain-id", type=int, default=None, help="the REQUESTED chain id; compared with eth_chainId")
-    ap.add_argument("--block", default="latest", help="block to pin: latest|N (decimal or 0x hex); default latest")
+    ap.add_argument("--block", default="latest",
+                    help="block to pin: latest|safe|finalized|N (decimal or 0x hex); default latest. A floating tag is resolved "
+                         "to a number by the pin and never cached; prefer finalized where the chain supports it")
     ap.add_argument("--call", action="append", default=[], help='extra read-only eth_call probe, e.g. "owner()" or "balanceOf(address):0x.."; repeatable')
-    ap.add_argument("--cache", default=None, help="response cache file (pinned reads only; chain id is always live)")
+    ap.add_argument("--cache", default=None,
+                    help="response cache file (pinned reads only; keyed by the LIVE chain id plus endpoint; a file recorded for "
+                         "another chain is ignored with a warning; chain id itself is always live)")
     ap.add_argument("--out", default=DEFAULT_OUT, help=f"packet output path (default ./{DEFAULT_OUT})")
     ap.add_argument("--timeout", type=float, default=20.0, help="per-request timeout in seconds")
+    ap.add_argument("--retries", type=int, default=2,
+                    help="retries for transient failures (timeouts, rate limits, DNS); rpc errors, reverts and pruned state are never retried; default 2")
     ap.add_argument("--json", action="store_true", help="print the packet JSON to stdout (summary goes to stderr)")
     return ap
 
@@ -891,9 +1043,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         except ValueError as e:
             print(f"rpc_probe: {e}", file=sys.stderr)
             return EXIT_USAGE
+    if args.retries < 0:
+        print("rpc_probe: --retries must be >= 0", file=sys.stderr)
+        return EXIT_USAGE
     cache = ResponseCache(args.cache) if args.cache else None
     try:
-        client = RpcClient(rpc, timeout=args.timeout, cache=cache)
+        client = RpcClient(rpc, timeout=args.timeout, cache=cache, retries=args.retries)
     except ValueError as e:
         print(f"rpc_probe: bad --rpc: {e}", file=sys.stderr)
         return EXIT_USAGE
@@ -911,6 +1066,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(summary, file=sys.stderr)
     else:
         print(summary)
+    if (packet.get("cache") or {}).get("status") == "ignored":
+        print(f"rpc_probe: WARNING: --cache file ignored: {packet['cache']['note']}", file=sys.stderr)
     if packet["identity"]["status"] == "CHAIN_MISMATCH":
         print("\n" + "!" * 78 + "\nWARNING: " + packet["identity"]["detail"] + "\n" + "!" * 78, file=sys.stderr)
     elif code == EXIT_FATAL:

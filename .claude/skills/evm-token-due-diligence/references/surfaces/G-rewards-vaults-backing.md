@@ -1,11 +1,14 @@
 # Surface G - Rewards, vaults, backing, and redemption
 
-Rating keys: `reward_accounting_liveness` (core check `G-REWARDS`) and `utility_redemption_rights`
-(core check `G-RIGHTS`, shared with `H-UTILITY`). Sub-checks: `G-INVENTORY-VS-LIABILITY`,
+Rating keys: `reward_accounting_liveness` (core check `G-REWARDS`), `utility_redemption_rights`
+(core check `G-RIGHTS`, shared with `H-UTILITY`) and, for the layer's own authority,
+`admin_treasury_reward_custody` (check `G-LAYER-ADMIN`). Sub-checks: `G-INVENTORY-VS-LIABILITY`,
 `G-FEE-ORIGIN`, `G-CONSERVATION`, `G-LIVENESS`, `G-EXIT-ROUTE`. Read this file for any question about
 "backed by", "rewards", "revenue share", "redeem", "vault", "staking", or "did these holdings come from
-LP fees"; always in `broad` mode. Custody of the reward layer's admin keys is rated under
-`admin_treasury_reward_custody` with the reads from `references/surfaces/A-token-controls.md`.
+LP fees"; always in `broad` mode. Upgrade, admin, pause or rescue authority over the reward, vault,
+distributor or backing layer (as opposed to the token itself) is check `G-LAYER-ADMIN`: resolve it with
+the `A-UPGRADE`/`A-ADMIN` procedure of `references/surfaces/A-token-controls.md` and rate it once, under
+`admin_treasury_reward_custody`. The checks table states which rating key each check feeds.
 
 ## Purpose
 
@@ -38,9 +41,9 @@ Flow reconstructions cite tx hashes and a stated block range. Promises are recor
 
 1. Inventory the reward/vault/backing layer from the architecture pass: vault(s), reward distributor,
    staking contract, claim contract, the asset each holds and the asset each pays. Resolve each as in
-   surface A (proxy status, admin, pausability, roles): an immutable token behind an upgradeable
-   reward layer is rated on the reward layer's upgrade authority (behavioral example 3 in
-   `references/examples/behavioral-examples.md`).
+   surface A (proxy status, admin, pausability, roles) and record the result under `G-LAYER-ADMIN`:
+   an immutable token behind an upgradeable reward layer is rated on the reward layer's upgrade
+   authority (behavioral example 3 in `references/examples/behavioral-examples.md`).
 2. `G-INVENTORY-VS-LIABILITY` - build three ledgers at P1:
    - inventory: `balanceOf(vault)` for every asset held (ERC-20 via `eth_call`, native via
      `eth_getBalance`, positions via the position manager), preserved raw;
@@ -88,12 +91,26 @@ Flow reconstructions cite tx hashes and a stated block range. Promises are recor
    - fee collections at receipt level: v3 pool `Collect(owner, recipient, tickLower, tickUpper,
      amount0, amount1)` and position-manager `Collect(tokenId, recipient, amount0, amount1)`; v4 fee
      deltas from `ModifyLiquidity`/hook events; the curve/platform fee events for launch pools - over a
-     stated range, paginated, with coverage;
+     stated range, paginated, with coverage. For each `Collect`, read `positions(tokenId)` at P1 (or at
+     the collect block if the id was later burned) and keep the row as `fee-origin` only when
+     token0/token1 include the target AND the pool matches `B-CANON`/`B-SIDE`; collections from other
+     pools are classed `fee-origin-other-pool` and reported separately, never as fees of this token;
    - forwarding transfers: `Transfer` logs from the collect recipient to the vault (or the vault as the
      direct recipient), matched by tx hash or by amount and block when forwarding is a separate tx;
-   - vault inflows: every `Transfer` to the vault in the range, classified as `fee-origin` (matched to
-     a collect), `donation/prefunding` (from a funder or treasury), `purchase` (from a swap), `mint`
-     (from the zero address), `carryover` (opening balance), `unmatched`.
+   - wrap inflows: a wrapped-native fee asset is invisible to `Transfer` when the vault wrapped native
+     itself - WETH9-style `deposit()` emits `Deposit(address,uint256)` and no `Transfer`. Also query
+     `Deposit` (topic0 recomputed with `ddcore.keccak256_hex`; listed in
+     `references/chains/chain-verification.md`) with the vault as `dst`, and `Withdrawal(address,uint256)`
+     for the reverse. Each `Deposit` is a `transform_in` row in the WETH file paired with a
+     `transform_out` row of the same tx in the native file, whose origin is then traced with
+     `trace_transaction`/`debug_traceTransaction` to a `Collect`/hook fee payout in native (v4
+     native-currency pools, unwrapping routers, curve fee payouts). Without a trace API, wrap-derived
+     WETH is `unmatched` with a limitation `L<n>` (`api_unavailable`), never `fee-origin`;
+   - vault inflows: every `Transfer` and `Deposit` to the vault in the range, classified as `fee-origin`
+     (matched to a collect on a pool containing the target), `fee-origin-other-pool`, `wrap` (WETH
+     `Deposit` by the vault; origin traced on the native ledger, then re-classed), `donation/prefunding`
+     (from a funder or treasury), `purchase` (from a swap), `mint` (from the zero address), `carryover`
+     (opening balance), `unmatched`.
    Distinguish the three quantities the question conflates: vault holdings (`balanceOf(vault)` at P1),
    pool inventory (the position's liquidity - not the vault's, and only convertible by decreasing
    liquidity: surface B), and unclaimed fees (`tokensOwed0/1` from `positions(tokenId)` plus fee growth
@@ -129,7 +146,9 @@ Flow reconstructions cite tx hashes and a stated block range. Promises are recor
 9. Write the rows. Inventory, liability and rights findings bind to P1; flow and conservation findings
    bind to tx hashes and the range (`is_historical: true`). Rate `reward_accounting_liveness` from
    conservation and liveness; rate `utility_redemption_rights` from the enforceable-rights and
-   exit-route rows; keep the reward layer's admin custody in `admin_treasury_reward_custody`.
+   exit-route rows; rate the layer's own authority once, as `G-LAYER-ADMIN` under
+   `admin_treasury_reward_custody` (a replaceable accounting layer can lower the liveness rating but
+   the authority finding itself is not repeated there).
 
 ### Verify-at-use table
 
@@ -143,18 +162,19 @@ Flow reconstructions cite tx hashes and a stated block range. Promises are recor
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| G-REWARDS | Reward/vault/backing/redemption accounting: entitlement rules, conservation, and processing liveness hold over the stated range and at P1 | inventory and liability reads at P1 + event sums over the range + last-processed read | `rpc_state`, `log_decoded`, `receipt` | any claim/process/fund tx after P1; upgrade of the reward layer |
-| G-RIGHTS | Each promised right is either enforceable by a holder-callable code path delivering a named asset, or is a promise; the delivered asset is identified | function guard + one successful non-privileged claim receipt with a matching balance delta | `bytecode`, `receipt`, `rpc_state` | pause, upgrade, allowance revocation, oracle change |
-| G-INVENTORY-VS-LIABILITY | Inventory (by availability class), liabilities and promises are separated and the backing ratio names both sides | `balanceOf`/`eth_getBalance` per asset + liability reads at P1 | `rpc_state`, `website` (promises, untrusted) | any vault inflow/outflow or claim after P1 |
-| G-FEE-ORIGIN | The share of vault inflows traceable to receipt-level fee collections over the range, with unmatched share stated | `Collect`/fee events -> forwarding transfers -> vault inflows, reconciled | `log_decoded`, `receipt` | new inflows after the closing block |
-| G-CONSERVATION | `sum(paid) <= funded + minted + carry-in` per asset, with each source named | event sums + opening balance | `log_decoded`, `rpc_state` | any distribution after the range |
-| G-LIVENESS | Last processed epoch/checkpoint is current at P1 and the keeper is funded and active | last-processed read + keeper's last receipt + keeper balance | `rpc_state`, `receipt` | one epoch elapsing without processing |
-| G-EXIT-ROUTE | The asset delivered on exit has a proven route to a raw asset with a quoted exit, or the chain ends in a promise | per-hop rights rows + a `C-QUOTE` on the terminal asset | `rpc_state`, `receipt`, `bytecode` | any change on any hop |
-| G-ADMIN-DEPENDENCY | Pause, admin funding by allowance, keeper processing, oracle and upgrade dependencies of each right are listed with holders | guard reads + `allowance` + keeper reads at P1 | `rpc_state`, `bytecode` | any admin action |
-| G-ENTITLEMENT | A sample of paid claims recomputes from the code's formula and pinned inputs | sample receipts + snapshot reads | `receipt`, `rpc_state`, `source_verified` | formula change (upgrade) |
-| G-DUPLICATE | No (holder, epoch) or claim id was paid twice in the range | claim event replay keyed by (holder, epoch/id) | `log_decoded` | none for the range |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| G-REWARDS | reward_accounting_liveness | Reward/vault/backing/redemption accounting: entitlement rules, conservation, and processing liveness hold over the stated range and at P1 | inventory and liability reads at P1 + event sums over the range + last-processed read | `rpc_state`, `log_decoded`, `receipt` | any claim/process/fund tx after P1; upgrade of the reward layer |
+| G-RIGHTS | utility_redemption_rights | Each promised right is either enforceable by a holder-callable code path delivering a named asset, or is a promise; the delivered asset is identified | function guard + one successful non-privileged claim receipt with a matching balance delta | `bytecode`, `receipt`, `rpc_state` | pause, upgrade, allowance revocation, oracle change |
+| G-INVENTORY-VS-LIABILITY | utility_redemption_rights | Inventory (by availability class), liabilities and promises are separated and the backing ratio names both sides | `balanceOf`/`eth_getBalance` per asset + liability reads at P1 | `rpc_state`, `website` (promises, untrusted) | any vault inflow/outflow or claim after P1 |
+| G-FEE-ORIGIN | admin_treasury_reward_custody | The share of vault inflows traceable to receipt-level fee collections over the range, with unmatched share stated | `Collect`/fee events -> forwarding transfers -> vault inflows, reconciled | `log_decoded`, `receipt` | new inflows after the closing block |
+| G-CONSERVATION | reward_accounting_liveness | `sum(paid) <= funded + minted + carry-in` per asset, with each source named | event sums + opening balance | `log_decoded`, `rpc_state` | any distribution after the range |
+| G-LIVENESS | reward_accounting_liveness | Last processed epoch/checkpoint is current at P1 and the keeper is funded and active | last-processed read + keeper's last receipt + keeper balance | `rpc_state`, `receipt` | one epoch elapsing without processing |
+| G-EXIT-ROUTE | utility_redemption_rights | The asset delivered on exit has a proven route to a raw asset with a quoted exit, or the chain ends in a promise | per-hop rights rows + a `C-QUOTE` on the terminal asset | `rpc_state`, `receipt`, `bytecode` | any change on any hop |
+| G-ADMIN-DEPENDENCY | utility_redemption_rights | Pause, admin funding by allowance, keeper processing, oracle and upgrade dependencies of each right are listed with holders | guard reads + `allowance` + keeper reads at P1 | `rpc_state`, `bytecode` | any admin action |
+| G-LAYER-ADMIN | admin_treasury_reward_custody | Upgrade, admin, pause and rescue authority over the reward, vault, distributor or backing layer (as opposed to the token itself): proxy status, implementation admin, owner/roles, pausability and who can change them at P1 | proxy slots + owner/role reads + selector scan of each layer contract, resolved with the A-UPGRADE/A-ADMIN procedure | `rpc_storage`, `rpc_state`, `bytecode` | `Upgraded`/`AdminChanged`/`OwnershipTransferred`/`Paused` on the layer |
+| G-ENTITLEMENT | reward_accounting_liveness | A sample of paid claims recomputes from the code's formula and pinned inputs | sample receipts + snapshot reads | `receipt`, `rpc_state`, `source_verified` | formula change (upgrade) |
+| G-DUPLICATE | reward_accounting_liveness | No (holder, epoch) or claim id was paid twice in the range | claim event replay keyed by (holder, epoch/id) | `log_decoded` | none for the range |
 
 Statuses follow the manifest rules: `pass` and `finding` need evidence ids; `unknown`/`skipped` need a
 reason with the limitation id. `unknown` is never a pass; a vault with an unread liability side cannot

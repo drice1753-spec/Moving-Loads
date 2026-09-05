@@ -3,8 +3,9 @@
 
 Usage: python3 <skill-root>/scripts/selftest.py [--quiet]
 Exit 0 only when all discovered tests pass AND every tests/fixtures/*/ pair matches its expected.json
-(valid must pass; reject-* must fail with the expected E-codes and none of the forbidden ones).
-Missing test files are simply not discovered; they do not fail the run.
+(valid must pass; reject-* must fail with the expected E-codes and none of the forbidden ones) AND the
+shipped template pair templates/manifest.example.json + report.example.md validates in place
+(no --report override). Missing test files are simply not discovered; they do not fail the run.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 TESTS = ROOT / "tests"
 FIXTURES = TESTS / "fixtures"
+TEMPLATE_MANIFEST = ROOT / "templates" / "manifest.example.json"
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
@@ -61,6 +63,15 @@ def run_fixtures() -> tuple[list[dict], bool]:
         ok_all = ok_all and ok
         rows.append({"fixture": d.name, "expected": want_result, "got": res["result"], "codes": got,
                      "missing": missing, "forbidden_hit": forbidden, "ok": ok,
+                     "warnings": sorted({w["code"] for w in res["warnings"]})})
+    if TEMPLATE_MANIFEST.is_file():
+        # the shipped example pair must validate with report.path resolved from the manifest alone
+        res = vr.validate(str(TEMPLATE_MANIFEST))
+        got = sorted({e["code"] for e in res["errors"]})
+        ok = res["result"] == "PASS"
+        ok_all = ok_all and ok
+        rows.append({"fixture": "templates/manifest.example.json", "expected": "PASS", "got": res["result"],
+                     "codes": got, "missing": [], "forbidden_hit": got, "ok": ok,
                      "warnings": sorted({w["code"] for w in res["warnings"]})})
     return rows, ok_all
 

@@ -7,7 +7,7 @@ target_symbol: SYNTH
 primary_pin_id: P1
 primary_pin_block: 20000000
 primary_pin_block_hash: 0x3accacbb3a5f108d99c4a7c58cd2347ec1fec384895349c1a9094d9a0cd6b8a8
-manifest_path: manifest.json
+manifest_path: manifest.example.json
 ---
 
 # Due-diligence report: SYNTH on chain 8453

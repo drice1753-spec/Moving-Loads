@@ -1,12 +1,21 @@
-"""Unit tests for scripts/ddcore.py (stdlib unittest; pytest also discovers these)."""
+"""Unit tests for scripts/ddcore.py (stdlib unittest; pytest also discovers these). No network: the only
+sockets opened are loopback raw servers from tests/mock_rpc.py."""
+import json
 import os
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+sys.path.insert(0, HERE)
 
 import ddcore  # noqa: E402
+from mock_rpc import RawResponseServer  # noqa: E402
+
+ENDPOINT = ["http", "127.0.0.1", 8545, "/"]
+ADDR = "0x" + "a1" * 20
 
 
 class KeccakTests(unittest.TestCase):
@@ -92,9 +101,15 @@ class HashHelperTests(unittest.TestCase):
 
     def test_hex_int(self):
         self.assertEqual(ddcore.hex_to_int("0x10"), 16)
+        self.assertEqual(ddcore.hex_to_int(7), 7)
         self.assertEqual(ddcore.int_to_hex(255), "0xff")
         with self.assertRaises(ValueError):
             ddcore.hex_to_int("10")
+        # JSON true/false is never a quantity (bool is an int subclass; an endpoint answering eth_chainId
+        # with `true` must not be reported as chain "True")
+        for b in (True, False):
+            with self.assertRaises(ValueError):
+                ddcore.hex_to_int(b)
 
 
 class AbiTests(unittest.TestCase):
@@ -119,6 +134,27 @@ class AbiTests(unittest.TestCase):
         self.assertEqual(ddcore.decode_abi_string(b"\x00" * 32), (None, "unresolved"))
         self.assertEqual(ddcore.decode_abi_string(b"\x01" * 40), (None, "unresolved"))
 
+    def test_decode_string_bounds_and_printability(self):
+        def head(offset, length):
+            return offset.to_bytes(32, "big") + length.to_bytes(32, "big")
+        # offset word past the data must not decode as an empty *resolved* string
+        self.assertEqual(ddcore.decode_abi_string((2 ** 200).to_bytes(32, "big") + b"\x00" * 32), (None, "unresolved"))
+        # length word past the data
+        self.assertEqual(ddcore.decode_abi_string(head(32, 2 ** 200) + b"abc".ljust(32, b"\x00")), (None, "unresolved"))
+        # a well-formed empty string is unresolved with the reason "empty string"
+        self.assertEqual(ddcore.decode_abi_string(head(32, 0)), (None, "unresolved"))
+        self.assertEqual(ddcore.decode_abi_string_detail(head(32, 0))[2], "empty string")
+        # control / non-printable characters are rejected on the dynamic path like on the bytes32 path
+        self.assertEqual(ddcore.decode_abi_string(head(32, 3) + b"a\x00b".ljust(32, b"\x00")), (None, "unresolved"))
+        self.assertEqual(ddcore.decode_abi_string(head(32, 3) + b"a\nb".ljust(32, b"\x00")), (None, "unresolved"))
+        self.assertEqual(ddcore.decode_abi_string(b"a\x00b".ljust(32, b"\x00")), (None, "unresolved"))
+        # a non-32 offset is still honoured when it is inside the data
+        data = head(64, 0)[:32] + b"\x00" * 32 + (3).to_bytes(32, "big") + b"abc".ljust(32, b"\x00")
+        self.assertEqual(ddcore.decode_abi_string(data), ("abc", "resolved"))
+        value, status, reason = ddcore.decode_abi_string_detail(b"MKR".ljust(32, b"\x00"))
+        self.assertEqual((value, status), ("MKR", "nonstandard"))
+        self.assertIn("bytes32", reason)
+
     def test_decode_uint_address(self):
         self.assertEqual(ddcore.decode_uint("0x" + "00" * 31 + "12"), 18)
         self.assertEqual(ddcore.decode_address("0x" + "00" * 12 + "ab" * 20), ddcore.to_checksum_address("0x" + "ab" * 20))
@@ -131,6 +167,15 @@ class TimeAndRedactionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ddcore.parse_iso_utc("2026-01-02 03:04:05")
 
+    def test_iso_utc_range(self):
+        self.assertEqual(ddcore.iso_utc(ddcore.MAX_UNIX_TIMESTAMP), "9999-12-31T23:59:59Z")
+        for bad in (-1, ddcore.MAX_UNIX_TIMESTAMP + 1, 0xFFFFFFFFFFFFFFFF, 2 ** 70, True, "soon"):
+            # catchable as either ValueError or OverflowError so a caller can record a per-pin limitation
+            with self.assertRaises(ValueError):
+                ddcore.iso_utc(bad)
+            with self.assertRaises(OverflowError):
+                ddcore.iso_utc(bad)
+
     def test_redact_url(self):
         r = ddcore.redact_url("https://user:pw@eth-mainnet.g.example.com/v2/AbCdEfGhIjKlMnOpQrStUvWx123?apikey=SECRET&x=1")
         self.assertNotIn("SECRET", r)
@@ -139,6 +184,22 @@ class TimeAndRedactionTests(unittest.TestCase):
         self.assertIn("<redacted>", r)
         self.assertTrue(r.startswith("https://eth-mainnet.g.example.com/v2/"))
         self.assertEqual(ddcore.redact_url("http://127.0.0.1:8545"), "http://127.0.0.1:8545")
+
+    def test_redact_url_edge_cases(self):
+        # IPv6 hosts keep their brackets (an endpoint string must stay parseable)
+        self.assertEqual(ddcore.redact_url("http://[::1]:8545"), "http://[::1]:8545")
+        self.assertEqual(ddcore.redact_url("http://[::1]:8545/v2/ABCDEFGHIJKLMNOPQRSTUVWX"), "http://[::1]:8545/v2/<redacted>")
+        # a non-numeric port never raises
+        self.assertEqual(ddcore.redact_url("https://host.example:abc/x"), ddcore.UNPARSEABLE_URL)
+        self.assertEqual(ddcore.redact_url(None), ddcore.UNPARSEABLE_URL)
+        # short keys after /vN/, letter+digit tokens, JWT-like dotted tokens and a key-like first host label
+        self.assertEqual(ddcore.redact_url("https://host.example/v2/shortkey"), "https://host.example/v2/<redacted>")
+        self.assertEqual(ddcore.redact_url("https://host.example/rpc/abc123XYZ789"), "https://host.example/rpc/<redacted>")
+        self.assertEqual(ddcore.redact_url("https://host.example/rpc/eyJhbGciOi.JIUzI1NiIsInR5.cCI6IkpXVCJ9"), "https://host.example/rpc/<redacted>")
+        self.assertEqual(ddcore.redact_url("https://ABCDEFGHIJKLMNOPQRSTUVWXYZ012345.rpc.example.invalid/"), "https://<redacted>.rpc.example.invalid/")
+        # ordinary network-name paths survive
+        self.assertEqual(ddcore.redact_url("https://rpc.example.invalid/eth"), "https://rpc.example.invalid/eth")
+        self.assertEqual(ddcore.redact_url("http://127.0.0.1:8545/"), "http://127.0.0.1:8545/")
 
 
 class RpcPolicyTests(unittest.TestCase):
@@ -149,17 +210,187 @@ class RpcPolicyTests(unittest.TestCase):
                 c.call(m, [])
         self.assertEqual(c.calls, [])
 
-    def test_cache_skips_floating_tags(self):
-        cache = ddcore.ResponseCache()
-        cache.put("h", "eth_getCode", ["0xabc", "latest"], "0x")
-        self.assertEqual(len(cache), 0)
-        cache.put("h", "eth_getCode", ["0xabc", "0x10"], "0x60")
-        self.assertEqual(cache.get("h", "eth_getCode", ["0xabc", "0x10"]), (True, "0x60"))
-        self.assertEqual(cache.get("h", "eth_getCode", ["0xabc", "0x11"]), (False, None))
-
     def test_bad_url_rejected(self):
         with self.assertRaises(ValueError):
             ddcore.RpcClient("ftp://x")
+
+    def test_userinfo_and_bad_port_rejected_with_clear_message(self):
+        with self.assertRaises(ValueError) as ctx:
+            ddcore.RpcClient("http://alice:pw@127.0.0.1:1/")
+        self.assertIn("userinfo", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            ddcore.RpcClient("http://127.0.0.1:abc")
+        self.assertIn("port", str(ctx.exception))
+        c = ddcore.RpcClient("http://[::1]:1/v2/ABCDEFGHIJKLMNOPQRSTUVWX?k=v")
+        self.assertEqual(c.endpoint, ["http", "::1", 1, "/v2/<redacted>"])
+        self.assertEqual(c.redacted_url, "http://[::1]:1/v2/<redacted>?k=<redacted>")
+        self.assertIsNone(c.chain_id)
+        self.assertEqual(ddcore.RpcClient("https://rpc.example.invalid/eth").endpoint, ["https", "rpc.example.invalid", 443, "/eth"])
+
+
+class ResponseCacheTests(unittest.TestCase):
+    def test_key_is_chain_and_endpoint_namespaced(self):
+        cache = ddcore.ResponseCache(chain_id=1)
+        cache.put(1, ENDPOINT, "eth_getCode", ["0xabc", "latest"], "0x")  # floating tags are never cached
+        self.assertEqual(len(cache), 0)
+        cache.put(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"], "0x60")
+        hit, entry = cache.get(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"])
+        self.assertTrue(hit)
+        self.assertEqual((entry["result"], entry["outcome"], entry["chain_id"], entry["port"]), ("0x60", "ok", 1, 8545))
+        self.assertEqual(cache.get(1, ENDPOINT, "eth_getCode", ["0xabc", "0x11"]), (False, None))
+        # the same read on another chain id is never served (put(chain 1) is not returned by get(chain 8453))
+        self.assertEqual(cache.get(8453, ENDPOINT, "eth_getCode", ["0xabc", "0x10"]), (False, None))
+        # the same host on another port or path is another endpoint
+        self.assertEqual(cache.get(1, ["http", "127.0.0.1", 8546, "/"], "eth_getCode", ["0xabc", "0x10"]), (False, None))
+        self.assertEqual(cache.get(1, ["http", "127.0.0.1", 8545, "/base"], "eth_getCode", ["0xabc", "0x10"]), (False, None))
+        self.assertEqual(cache.get(1, ["https", "127.0.0.1", 8545, "/"], "eth_getCode", ["0xabc", "0x10"]), (False, None))
+        self.assertNotEqual(ddcore.ResponseCache.key(1, ENDPOINT, "m", []), ddcore.ResponseCache.key(8453, ENDPOINT, "m", []))
+        # an unbound cache (chain id not yet observed) refuses reads and writes
+        unbound = ddcore.ResponseCache()
+        unbound.put(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"], "0x60")
+        self.assertEqual(len(unbound), 0)
+        self.assertEqual(unbound.get(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"]), (False, None))
+        with self.assertRaises(ValueError):
+            unbound.bind_chain(0)
+
+    def test_file_header_records_chain_and_refuses_another(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cache.json")
+            c1 = ddcore.ResponseCache(path, chain_id=1)
+            c1.put(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"], "0x60")
+            with open(path, encoding="utf-8") as f:
+                obj = json.load(f)
+            self.assertEqual((obj["cache_version"], obj["chain_id"], len(obj["entries"])), (ddcore.CACHE_FORMAT_VERSION, 1, 1))
+            with self.assertRaises(ddcore.RpcCoverageError) as ctx:
+                ddcore.ResponseCache(path, chain_id=8453)
+            self.assertEqual(ctx.exception.kind, "rpc_error")
+            self.assertIn("cache file belongs to chain 1", ctx.exception.message)
+            # RpcClient.set_chain_id propagates the refusal; the client stays unbound and uncached
+            client = ddcore.RpcClient("http://127.0.0.1:9", cache=ddcore.ResponseCache(path))
+            with self.assertRaises(ddcore.RpcCoverageError):
+                client.set_chain_id(8453)
+            self.assertIsNone(client.chain_id)
+            self.assertFalse(client._cache_usable())
+            client.set_chain_id(1)
+            self.assertTrue(client._cache_usable())
+            # loading without a chain id is allowed but nothing is served until bound
+            c2 = ddcore.ResponseCache(path)
+            self.assertEqual(c2.get(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"]), (False, None))
+            c2.bind_chain(1)
+            self.assertTrue(c2.get(1, ENDPOINT, "eth_getCode", ["0xabc", "0x10"])[0])
+            # a legacy file without the header carried no chain binding: its entries are ignored, not trusted
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"deadbeef": {"result": "0x60"}}, f)
+            c3 = ddcore.ResponseCache(path, chain_id=1)
+            self.assertEqual(len(c3), 0)
+            self.assertIn("ignored", c3.discarded)
+
+    def test_execution_failure_cached_as_revert_and_replayed(self):
+        cache = ddcore.ResponseCache(chain_id=1)
+        c = ddcore.RpcClient("http://127.0.0.1:9", cache=cache, retries=0, chain_id=1)
+
+        def revert(method, params):
+            raise ddcore.RpcCoverageError("rpc_error", "rpc error 3: execution reverted", method, params, execution_failure=True)
+
+        with mock.patch.object(c, "_do", revert):
+            with self.assertRaises(ddcore.RpcCoverageError) as ctx:
+                c.eth_call(ADDR, "0x8da5cb5b", "0x10")
+        self.assertTrue(ctx.exception.execution_failure)
+        self.assertFalse(ctx.exception.cached)
+        self.assertEqual(len(cache), 1)
+        with mock.patch.object(c, "_do", side_effect=AssertionError("network must not be used")):
+            with self.assertRaises(ddcore.RpcCoverageError) as ctx2:
+                c.eth_call(ADDR, "0x8da5cb5b", "0x10")
+        self.assertTrue(ctx2.exception.cached)
+        self.assertTrue(ctx2.exception.execution_failure)
+        self.assertEqual(c.calls[-1], {"method": "eth_call", "params": [{"to": ADDR, "data": "0x8da5cb5b"}, "0x10"],
+                                       "cached": True, "outcome": "reverted"})
+        # reverts at a floating tag and infrastructure failures are never cached
+        with mock.patch.object(c, "_do", revert):
+            with self.assertRaises(ddcore.RpcCoverageError):
+                c.eth_call(ADDR, "0x8da5cb5b", "latest")
+
+        def http500(method, params):
+            raise ddcore.RpcCoverageError("rpc_error", "HTTP 500", method, params)
+
+        with mock.patch.object(c, "_do", http500):
+            with self.assertRaises(ddcore.RpcCoverageError):
+                c.eth_call(ADDR, "0xdeadbeef", "0x10")
+        self.assertEqual(len(cache), 1)
+
+
+class RpcTransportTests(unittest.TestCase):
+    def test_malformed_http_is_a_coverage_error_not_a_crash(self):
+        payloads = {
+            "truncated body (IncompleteRead)": b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x1\"",
+            "garbage status line (BadStatusLine)": b"garbage\r\n\r\n",
+        }
+        for label, payload in payloads.items():
+            with RawResponseServer(payload) as srv:
+                c = ddcore.RpcClient(srv.url, timeout=3, retries=0)
+                with self.assertRaises(ddcore.RpcCoverageError, msg=label) as ctx:
+                    c.call("eth_chainId", [])
+                self.assertEqual(ctx.exception.kind, "rpc_error", label)
+                self.assertIn("malformed HTTP response", ctx.exception.message, label)
+
+    def test_execution_failures_are_classified_only_for_executing_methods(self):
+        c = ddcore.RpcClient("http://127.0.0.1:9", retries=0)
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": 3, "message": "execution reverted"}}).encode()
+
+        class _Resp:
+            def __init__(self, raw):
+                self._raw = raw
+
+            def read(self):
+                return self._raw
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(body)):
+            with self.assertRaises(ddcore.RpcCoverageError) as ctx:
+                c.call("eth_call", [{"to": ADDR, "data": "0x"}, "0x10"])
+            self.assertTrue(ctx.exception.execution_failure)
+            with self.assertRaises(ddcore.RpcCoverageError) as ctx:
+                c.call("eth_getCode", [ADDR, "0x10"])
+            self.assertFalse(ctx.exception.execution_failure)
+
+    def test_retry_policy(self):
+        attempts: list[str] = []
+
+        def pruned(method, params):
+            attempts.append(method)
+            raise ddcore.RpcCoverageError("rpc_pruned", "missing trie node", method, params)
+
+        def timeout(method, params):
+            attempts.append(method)
+            raise ddcore.RpcCoverageError("rpc_timeout", "timed out", method, params)
+
+        c = ddcore.RpcClient("http://127.0.0.1:9", retries=2)
+        # pruned state never reappears: not retried, no sleep
+        with mock.patch.object(c, "_do", pruned), mock.patch("time.sleep", side_effect=AssertionError("must not sleep")):
+            with self.assertRaises(ddcore.RpcCoverageError):
+                c.call("eth_getCode", [ADDR, "0x10"])
+        self.assertEqual(len(attempts), 1)
+        self.assertIn("rpc_pruned", ddcore.NON_RETRIED_KINDS)
+        # a timeout is retried `retries` times with backoff
+        attempts.clear()
+        sleeps: list[float] = []
+        with mock.patch.object(c, "_do", timeout), mock.patch("time.sleep", lambda s: sleeps.append(s)):
+            with self.assertRaises(ddcore.RpcCoverageError):
+                c.call("eth_getCode", [ADDR, "0x10"])
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len(sleeps), 2)
+        # retries == 0: exactly one attempt and never a sleep
+        attempts.clear()
+        c0 = ddcore.RpcClient("http://127.0.0.1:9", retries=0)
+        with mock.patch.object(c0, "_do", timeout), mock.patch("time.sleep", side_effect=AssertionError("must not sleep")):
+            with self.assertRaises(ddcore.RpcCoverageError):
+                c0.call("eth_getCode", [ADDR, "0x10"])
+        self.assertEqual(len(attempts), 1)
 
 
 if __name__ == "__main__":

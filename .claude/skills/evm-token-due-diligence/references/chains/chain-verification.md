@@ -12,21 +12,30 @@ content.
 1. Read `eth_chainId` live from the endpoint you will use - never from a cache, never from a chain list -
    and compare it with the REQUESTED chain id. `scripts/rpc_probe.py` does exactly this before any other
    read; on mismatch it writes the packet with `identity.status = CHAIN_MISMATCH` and exits 3, and on an
-   unreadable chain id it writes `UNVERIFIED` and reads nothing else. Both stop the run: fix the endpoint,
-   or record the limitation and report that nothing could be pinned. The validator rejects a manifest whose
-   requested and observed chains differ (`E-CHAIN-MISMATCH`; fixture
-   `tests/fixtures/reject-same-symbol-other-chain`).
+   unreadable chain id it writes `UNVERIFIED`, exits 1 and reads nothing else. Exit 3: STOP - a mismatch
+   is an identity failure recorded under `identity`, never a coverage limitation; fix the endpoint or ask
+   the user which chain was meant. Exit 1: STOP and report the limitation (nothing could be pinned).
+   Exit 0: continue. Without `--chain-id` the packet says `OBSERVED_ONLY`: obtain the user's explicit
+   confirmation of the observed id, re-run with `--chain-id`, and require `MATCH` before anything else.
+   The validator rejects a manifest whose requested and observed chains differ (`E-CHAIN-MISMATCH`;
+   fixture `tests/fixtures/reject-same-symbol-other-chain`).
    ```
    python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<target> --chain-id <requested> --block finalized --out target-packet.json
+   # --block finalized where the endpoint supports the tag; fall back to latest if it is rejected, and record which (section 3)
    ```
 2. `eth_chainId` is authoritative; `net_version` is legacy and can differ on some chains. Chain names are
-   labels (`target.requested.chain_name`), never inputs to a decision.
+   labels (`target.requested.chain_name`): a name the user gave may be mapped to a REQUESTED id (step 4)
+   but never decides anything - `eth_chainId` does.
 3. Record `web3_clientVersion` in `observed.client_version` (the node software hints at the stack and
    therefore at finality semantics, section 3). A load balancer can front several chains: verify per
    endpoint and per session, and re-verify at the end of a long run by re-reading the primary pin with
    `eth_getBlockByHash` (section 2).
-4. If the user supplied only a symbol or a name, ask for chain id and address; do not resolve either from
-   a token list, an explorer search, or a dashboard.
+4. If the user supplied only a token symbol or token name (not an address), ask for chain id and address;
+   never resolve either from a token list, an explorer search, or a dashboard. A chain NAME ("Base",
+   "Arbitrum") given with an address MAY be mapped to the commonly cited id in section 6 as the REQUESTED
+   id, provided the mapping is recorded in `requested.source` ("user said 'Base'; mapped to commonly cited
+   id 8453, confirmed by eth_chainId") and `eth_chainId` on the endpoint confirms it; a different observed
+   id is a mismatch - stop and ask which of the two the user meant.
 
 ## 2. One pin per chain touched
 
@@ -34,8 +43,9 @@ content.
   secondary_chain`), and every historical snapshot its own pin (`purpose: historical`). A chain referenced
   by any scope address, evidence row, finding or check without a pin fails validation
   (`E-CHAIN-UNPINNED`); a primary pin not on the target chain fails (`E-PIN-PRIMARY`).
-- Pin with the probe (`--block latest|N|safe|finalized`); the pin carries the raw header, so
-  `E-PIN-HEADER-MISMATCH`/`E-PIN-PLACEHOLDER`/`E-PIN-TIME` catch edited or invented pins.
+- Pin with the probe (`--block finalized|safe|latest|N`; `finalized` where supported, section 3); the pin
+  carries the raw header, so `E-PIN-HEADER-MISMATCH`/`E-PIN-PLACEHOLDER`/`E-PIN-TIME` catch edited or
+  invented pins.
 - Reorg check at the end of the run: `eth_getBlockByHash(pin.block_hash)` must still return the block. A
   null result means the pinned block was reorged: re-pin, redo every state read, and re-fetch receipts
   whose block hashes changed. Record the check as a `manual_note` evidence row.
@@ -55,11 +65,12 @@ challenge period has not delivered anything yet.
   is an `external_dependencies` item (`H-DEPS`), not a token finding.
 - Challenge periods (commonly 7 days on optimistic rollups; verify) bound canonical withdrawals, not the
   validity of a state read; they matter for `F-BRIDGE-LEGS` and proceeds reconciliation.
-- Rule: pin to `finalized` when the endpoint supports the tag and the decision tolerates the lag; otherwise
-  `latest` minus a stated margin (choose the margin from the stack's reorg depth, and say why). Say which
-  in the pin's `purpose` and in `## Coverage and limitations`. Historical snapshots go well past finality.
-- An endpoint that rejects `finalized`/`safe` (error or null) is recorded as a limitation (`rpc_error`)
-  and the pin falls back to a numbered block.
+- Rule: pin to `finalized` when the endpoint supports the tag and the decision tolerates the lag (the
+  canonical `rpc_probe.py` command in `SKILL.md` does); otherwise `latest`, or `latest` minus a stated
+  margin (choose the margin from the stack's reorg depth, and say why). Say which in the pin's `purpose`
+  and in `## Coverage and limitations`. Historical snapshots go well past finality.
+- An endpoint that rejects `finalized`/`safe` (error or null) is recorded as a limitation (`rpc_error`);
+  re-run with `latest` or a numbered block and record which tag the pin actually used.
 
 ## 4. RPC capability probing, recorded as coverage
 
@@ -84,8 +95,12 @@ read-only methods and classifies failures into these kinds (`RpcCoverageError.ki
 ```
 python3 - <<'EOF'
 import sys; sys.path.append("<skill-root>/scripts")
-from ddcore import RpcClient, ResponseCache, RpcCoverageError, int_to_hex
+from ddcore import RpcClient, ResponseCache, RpcCoverageError, int_to_hex, hex_to_int
 c = RpcClient("<RPC URL>", cache=ResponseCache("rpc-cache.json"))
+observed = hex_to_int(c.call("eth_chainId", []))          # live, never cached
+assert observed == <requested chain id>, f"chain mismatch: observed {observed}"
+c.set_chain_id(observed)   # binds the cache to the live chain id; nothing is cached before this, and a
+                           # cache file recorded for another chain raises RpcCoverageError (use one per packet)
 pin = <P1 block number>; old = <deployment block or pin - 100000>; target = "0x<target>"
 for name, method, params in [
     ("state@pin", "eth_getCode", [target, int_to_hex(pin)]),
@@ -130,7 +145,9 @@ v4 native pool quotes in whatever `address(0)` is on that chain.
 
 ## 6. Commonly cited chain ids (verify via `eth_chainId` at use time)
 
-Labels for the packet's `chain_name`; never an input. The only proof is `eth_chainId` on the endpoint used.
+Labels for the packet's `chain_name`, and the mapping source when the user names a chain instead of an
+id (section 1 step 4: record the mapping in `requested.source`; `eth_chainId` confirms). The table is
+never proof; the only proof is `eth_chainId` on the endpoint used.
 
 | Chain (label) | Commonly cited id | Native currency (commonly cited) |
 |---|---|---|
@@ -203,7 +220,9 @@ An id not in this table is not suspicious; an id that DIFFERS from the requested
 
 ## 9. Onboarding an unfamiliar chain (checklist)
 
-1. Take chain id and address from the user; read `eth_chainId`; run the probe; stop on mismatch.
+1. Take chain id (or a chain name mapped per section 1 step 4 and recorded in `requested.source`) and
+   address from the user; run the probe with `--block finalized`; stop on mismatch (exit 3) or an
+   unverified id (exit 1).
 2. Identify the stack from `web3_clientVersion` and the chain's documentation (L1, OP-stack, Nitro-style,
    zk rollup, sidechain); note block time, finality tags supported, sequencer model, challenge period,
    transaction-filtering or forced-inclusion features, upgrade authority. Record each as a

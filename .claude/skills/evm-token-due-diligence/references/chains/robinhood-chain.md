@@ -35,12 +35,12 @@ and every number must be re-read from the chain or its current documentation at 
 | Explorer | `robinhoodchain.blockscout.com` | fetch a tx hash obtained from RPC and confirm the explorer's network; discovery only |
 | Native currency | ETH (bridged) | a receipt's `gasUsed x effectiveGasPrice`; the wrapped-native contract by `Deposit`/`Withdrawal` behavior, not by symbol |
 | Block time | ~100 ms | `eth_getBlockByNumber` timestamps over a span of blocks at P1 (many blocks share one second) |
-| Finality tags | `safe`/`finalized` semantics of a Nitro-style L2 | probe `--block finalized`; on error fall back to a numbered block and record why |
+| Finality tags | `safe`/`finalized` semantics of a Nitro-style L2 | probe `--block finalized`; if the tag is rejected fall back to `latest` or a numbered block and record which (`rpc_error` limitation) |
 | Withdrawal delay | 7 days | the bridge documentation at use time; an Outbox claim receipt for a real leg |
 | Sequencer / filtering / upgrade delay | single sequencer; ArbOS filtering; docs vs L2BEAT tension | current L2BEAT page and docs governance page; record both statements with dates as `manual_note` |
 | L1 contract addresses | table above (low) | the docs protocol-contracts page at use time; `eth_getCode` on Ethereum at an Ethereum pin |
 | DEX infrastructure (v2/v3 factories, v4 PoolManager/PositionManager/StateView/Quoter) | present per launch announcements; addresses not captured | the Uniswap deployments page, then `PoolCreated`/`Initialize` receipts from the target's own logs; `references/platforms/uniswap-v3.md`, `uniswap-v4.md` |
-| Launch platforms | Pons V1/V2 factory addresses in `references/platforms/pons-style-launches.md`; others unverified | `to` of the target's launch receipt and the factory code hash |
+| Launch platforms | Pons V1/V2 factory addresses in `references/platforms/pons-style-launches.md`; others unverified | the emitter of the launch event in the target's launch receipt (the tx `to` may be a forwarder) and that emitter's code hash |
 | Stock Token contracts and feeds | served by an API | the API response is `api`-class discovery; confirm each contract by code and a Chainlink `AggregatorV3Interface` read at P1 |
 | Trace / archive availability | third-party providers | capability probes (`references/chains/chain-verification.md` section 4) on the endpoint actually used |
 
@@ -130,7 +130,8 @@ and every number must be re-read from the chain or its current documentation at 
 ## Onboarding steps for this (or any unfamiliar) chain
 
 1. `rpc_probe.py --chain-id 4663 --block finalized` against the endpoint you intend to use; stop on
-   `CHAIN_MISMATCH`; if `finalized` is rejected, re-run with a numbered block and record the limitation.
+   `CHAIN_MISMATCH` (exit 3); if `finalized` is rejected, re-run with `latest` or a numbered block and
+   record which tag the pin used (`rpc_error` limitation; `chain-verification.md` section 3).
 2. Record `web3_clientVersion`; confirm a Nitro-style client; note in `known_limitations` that finality
    semantics, filtering and single-sequencer dependency were taken from documentation dated at use time.
 3. Run the capability probes (state at pin, archive at an older block, `eth_getLogs` window, traces,

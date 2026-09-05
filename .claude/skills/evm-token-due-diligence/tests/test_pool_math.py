@@ -46,11 +46,15 @@ class V3PoolTests(unittest.TestCase):
         self.assertEqual(res["pool"], V3_POOL_500)
         self.assertEqual(res["tick_spacing_hint"], 10)
 
-    def test_argument_order_does_not_matter(self):
+    def test_argument_order_does_not_matter_but_is_reported(self):
         a = pm.v3_pool(V3_FACTORY, USDC, WETH, 500)
         b = pm.v3_pool(V3_FACTORY, WETH, USDC, 500)
         self.assertEqual(a["pool"], b["pool"])
         self.assertEqual(a["token0"], b["token0"])
+        self.assertFalse(a["inputs_reordered"])
+        self.assertTrue(b["inputs_reordered"])
+        self.assertTrue(pm.v2_pair(V2_FACTORY, WETH, USDC)["inputs_reordered"])
+        self.assertFalse(pm.v2_pair(V2_FACTORY, USDC, WETH)["inputs_reordered"])
 
     def test_lowercase_inputs_accepted_and_checksummed(self):
         res = pm.v3_pool(V3_FACTORY.lower(), USDC.lower(), WETH.lower(), 500)
@@ -195,9 +199,21 @@ class TickPriceTests(unittest.TestCase):
         down = Decimal(pm.tick_to_price(-1000, 18, 18)["price_raw_token1_per_token0"])
         self.assertLess(abs(up * down - 1), Decimal("1e-40"))
 
-    def test_out_of_range_tick_warns(self):
-        res = pm.tick_to_price(pm.MAX_TICK + 1, 18, 18)
-        self.assertTrue(any("outside TickMath range" in w for w in res["warnings"]))
+    def test_out_of_range_tick_is_an_error(self):
+        # no pool can hold such a tick, and a huge one would overflow Decimal: error, never a priced answer
+        for tick in (pm.MAX_TICK + 1, pm.MIN_TICK - 1, 100_000_000_000, -100_000_000_000):
+            with self.assertRaises(pm.PoolMathError, msg=tick) as ctx:
+                pm.tick_to_price(tick, 18, 18)
+            self.assertIn("outside TickMath range", str(ctx.exception))
+        self.assertEqual(pm.tick_to_price(pm.MAX_TICK, 18, 18)["warnings"], [])
+        self.assertEqual(pm.tick_to_price(pm.MIN_TICK, 18, 18)["warnings"], [])
+
+    def test_decimals_must_be_uint8(self):
+        for d0, d1 in ((-1, 18), (18, 256), (300, 6)):
+            with self.assertRaises(pm.PoolMathError):
+                pm.tick_to_price(0, d0, d1)
+            with self.assertRaises(pm.PoolMathError):
+                pm.sqrtprice_to_price(1 << 96, d0, d1)
 
 
 class SqrtPriceTests(unittest.TestCase):
@@ -215,9 +231,10 @@ class SqrtPriceTests(unittest.TestCase):
 
     def test_bounds_and_rejections(self):
         self.assertEqual(pm.sqrtprice_to_price(pm.MIN_SQRT_RATIO, 18, 18)["warnings"], [])
-        self.assertTrue(pm.sqrtprice_to_price(pm.MAX_SQRT_RATIO + 1, 18, 18)["warnings"])
-        with self.assertRaises(pm.PoolMathError):
-            pm.sqrtprice_to_price(0, 18, 18)
+        self.assertEqual(pm.sqrtprice_to_price(pm.MAX_SQRT_RATIO, 18, 18)["warnings"], [])
+        for sp in (pm.MAX_SQRT_RATIO + 1, pm.MIN_SQRT_RATIO - 1, 0, -5):
+            with self.assertRaises(pm.PoolMathError, msg=sp):
+                pm.sqrtprice_to_price(sp, 18, 18)
 
     def test_tick_roundtrip_approx(self):
         tick = 12345
@@ -246,6 +263,34 @@ class CliTests(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual(data["pool"], V3_POOL_500)
         self.assertIn("init_code_hash used:", data["init_code_hash_notice"])
+        self.assertFalse(data["inputs_reordered"])
+        self.assertIsNone(data["order_notice"])
+
+    def test_reordered_inputs_are_announced(self):
+        swapped = f"input order swapped: token0={USDC} token1={WETH}"
+        rc, out, _ = self._run(["v3-pool", "--factory", V3_FACTORY, "--token-a", WETH, "--token-b", USDC, "--fee", "500"])
+        self.assertEqual(rc, 0)
+        self.assertIn(swapped, out)
+        rc, out, _ = self._run(["v2-pair", "--factory", V2_FACTORY, "--token-a", WETH, "--token-b", USDC])
+        self.assertEqual(rc, 0)
+        self.assertIn(swapped, out)
+        rc, out, _ = self._run(["v3-pool", "--factory", V3_FACTORY, "--token-a", USDC, "--token-b", WETH, "--fee", "500"])
+        self.assertNotIn("input order swapped", out)
+        rc, out, _ = self._run(["v2-pair", "--factory", V2_FACTORY, "--token-a", WETH, "--token-b", USDC, "--json"])
+        data = json.loads(out)
+        self.assertTrue(data["inputs_reordered"])
+        self.assertEqual(data["order_notice"], swapped)
+
+    def test_out_of_range_inputs_exit_2(self):
+        for argv in (["v3-tick-to-price", "--tick", "887273", "--decimals0", "6", "--decimals1", "18"],
+                     ["v3-tick-to-price", "--tick", "100000000000", "--decimals0", "6", "--decimals1", "18"],
+                     ["v3-tick-to-price", "--tick", "0", "--decimals0", "-1", "--decimals1", "300"],
+                     ["v3-sqrtprice-to-price", "--sqrt-price-x96", str(pm.MAX_SQRT_RATIO + 1), "--decimals0", "18", "--decimals1", "18"]):
+            rc, out, err = self._run(argv)
+            self.assertEqual(rc, 2, argv)
+            self.assertEqual(out, "", argv)
+            self.assertTrue(err.startswith("error:"), argv)
+            self.assertNotIn("Traceback", err)
 
     def test_v2_pair_human(self):
         rc, out, _ = self._run(["v2-pair", "--factory", V2_FACTORY, "--token-a", USDC, "--token-b", WETH,

@@ -122,8 +122,15 @@ Every read cites P1 (`target-packet.json` -> `pin`); never `latest`.
       own admin role can shorten the delay.
     - For every holder: runtime status (`contract`/`eoa`), and scope rows with roles `owner`,
       `role_holder`, `multisig`, `timelock`, `proxy_admin`, `beacon`, `implementation`.
-    Run the reads against each admin contract with `rpc_probe.py --address <that contract>`; the tool
-    binds each probe to P1 and preserves raw return data.
+    Run the reads against each admin contract, always at the frozen pin:
+    ```
+    python3 <skill-root>/scripts/rpc_probe.py --rpc URL --address 0x<admin contract> --chain-id N --block <P1 block number> \
+        --call "owner()" --call "getThreshold()" --cache rpc-cache.json --out packet-A-admin-<n>.json
+    ```
+    Always pass `--block <P1 block number>` taken from the frozen packet's `pin.block_number`: a
+    secondary packet produced without it pins to `latest`, names that pin `P1` too, and its probes may
+    NOT be cited as P1. Before copying any probe into an evidence row assert
+    `packet.pin.block_hash == frozen.pin.block_hash`; on mismatch discard the packet and re-run.
 11. Test the "renounced" / "no owner" claim as a proposition, never as a conclusion. `owner()` equal to
     the zero address covers ONLY the Ownable owner. Check, and list in the finding, each of:
     remaining AccessControl roles; the implementation admin / beacon owner; external controller
@@ -146,20 +153,20 @@ contract (a shared ProxyAdmin, a canonical bridge minter) enters the picture, re
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| A-MINT | Every path that can increase `totalSupply` or any balance without a transfer is inventoried, with the holder of each | selectors of every runtime + `eth_call` of each guard/role at P1 | `bytecode`, `rpc_state`, `log_decoded` (RoleGranted replay) | new role grant, upgrade, minter set change, rebase call after P1 |
-| A-UPGRADE | Who can change the code behind the token and each admin contract | EIP-1967/1822 slots at P1 + admin/beacon/diamond owner reads | `rpc_storage`, `rpc_state`, `bytecode` | `Upgraded`/`BeaconUpgraded`/`AdminChanged`/`DiamondCut` event, ownership transfer |
-| A-SEIZE | Who can move or rewrite a third party's balance | selectors + guard reads; trace of a historical privileged move when source is unverified | `bytecode`, `rpc_state`, `trace` | upgrade, role change |
-| A-RESTRICT | Pause, blacklist/whitelist, cooldown, limits, trading gate: current value and setter holder | each flag/value read at P1 + setter authority | `rpc_state`, `rpc_storage`, `bytecode` | any setter call after P1 (`Paused`, gate events) |
-| A-TAX | Tax rates, ceilings, exemptions, recipients and their setters | rates and exemption reads at P1 + ceiling from verified source or bytecode constant | `rpc_state`, `source_verified`, `bytecode` | setter call after P1 |
-| A-EXTCALL | External, delegate and arbitrary calls reachable from token or admin, and their targets | opcode flags + target reads (router, tracker, hook) at P1 | `bytecode`, `rpc_state`, `trace` | target setter call, upgrade |
-| A-ADMIN | Current holders of every authority, their type (EOA/multisig/timelock/contract), and who can change them | owner/pendingOwner/role members confirmed with `hasRole`, threshold, owners, modules, min delay at P1 | `rpc_state`, `log_decoded` | `OwnershipTransferred`, `RoleGranted/Revoked`, `ChangedThreshold`, `AddedOwner`, `EnabledModule`, `MinDelayChange` |
-| A-SOURCE-MATCH | Published source corresponds to the deployed runtime(s) | code hash at P1 vs compiled runtime hash, differences listed | `bytecode`, `source_verified` | upgrade (new implementation hash) |
-| A-ROLE-REPLAY | The RoleGranted/RoleRevoked replay covers deployment..P1 without gaps and agrees with `hasRole` | log range, pagination, per-role member list, `hasRole` confirmations | `log_decoded`, `rpc_state` | any role event after P1 |
-| A-PUSH20 | Hardcoded addresses in the runtime are resolved and classified | PUSH20 candidate list with `eth_getCode` status and scope match | `bytecode`, `rpc_state` | upgrade |
-| A-CONTROLLER | External contracts the token reads for fees/limits/recipients, and their admins | `eth_call` of each pointer at P1 + the pointed contract's owner/proxy status | `rpc_state`, `rpc_storage` | pointer setter call, controller upgrade |
-| A-RENOUNCED | The "renounced/no owner" claim, tested against roles, implementation admin, controllers, PUSH20, lockers | `owner()` at P1 plus every item of step 11 | `rpc_state`, `bytecode` | any of the above stale conditions |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| A-MINT | token_controls | Every path that can increase `totalSupply` or any balance without a transfer is inventoried, with the holder of each | selectors of every runtime + `eth_call` of each guard/role at P1 | `bytecode`, `rpc_state`, `log_decoded` (RoleGranted replay) | new role grant, upgrade, minter set change, rebase call after P1 |
+| A-UPGRADE | token_controls | Who can change the code behind the token and each admin contract | EIP-1967/1822 slots at P1 + admin/beacon/diamond owner reads | `rpc_storage`, `rpc_state`, `bytecode` | `Upgraded`/`BeaconUpgraded`/`AdminChanged`/`DiamondCut` event, ownership transfer |
+| A-SEIZE | token_controls | Who can move or rewrite a third party's balance | selectors + guard reads; trace of a historical privileged move when source is unverified | `bytecode`, `rpc_state`, `trace` | upgrade, role change |
+| A-RESTRICT | token_controls | Pause, blacklist/whitelist, cooldown, limits, trading gate: current value and setter holder | each flag/value read at P1 + setter authority | `rpc_state`, `rpc_storage`, `bytecode` | any setter call after P1 (`Paused`, gate events) |
+| A-TAX | token_controls | Tax rates, ceilings, exemptions, recipients and their setters | rates and exemption reads at P1 + ceiling from verified source or bytecode constant | `rpc_state`, `source_verified`, `bytecode` | setter call after P1 |
+| A-EXTCALL | token_controls | External, delegate and arbitrary calls reachable from token or admin, and their targets | opcode flags + target reads (router, tracker, hook) at P1 | `bytecode`, `rpc_state`, `trace` | target setter call, upgrade |
+| A-ADMIN | token_controls | Current holders of every authority, their type (EOA/multisig/timelock/contract), and who can change them | owner/pendingOwner/role members confirmed with `hasRole`, threshold, owners, modules, min delay at P1 | `rpc_state`, `log_decoded` | `OwnershipTransferred`, `RoleGranted/Revoked`, `ChangedThreshold`, `AddedOwner`, `EnabledModule`, `MinDelayChange` |
+| A-SOURCE-MATCH | token_controls | Published source corresponds to the deployed runtime(s) | code hash at P1 vs compiled runtime hash, differences listed | `bytecode`, `source_verified` | upgrade (new implementation hash) |
+| A-ROLE-REPLAY | token_controls | The RoleGranted/RoleRevoked replay covers deployment..P1 without gaps and agrees with `hasRole` | log range, pagination, per-role member list, `hasRole` confirmations | `log_decoded`, `rpc_state` | any role event after P1 |
+| A-PUSH20 | token_controls | Hardcoded addresses in the runtime are resolved and classified | PUSH20 candidate list with `eth_getCode` status and scope match | `bytecode`, `rpc_state` | upgrade |
+| A-CONTROLLER | token_controls | External contracts the token reads for fees/limits/recipients, and their admins | `eth_call` of each pointer at P1 + the pointed contract's owner/proxy status | `rpc_state`, `rpc_storage` | pointer setter call, controller upgrade |
+| A-RENOUNCED | token_controls | The "renounced/no owner" claim, tested against roles, implementation admin, controllers, PUSH20, lockers | `owner()` at P1 plus every item of step 11 | `rpc_state`, `bytecode` | any of the above stale conditions |
 
 Statuses follow the manifest rules: `pass` and `finding` need evidence ids; `unknown`/`skipped` need a
 reason (cite the limitation id when an RPC failure caused it). `unknown` is never a pass.

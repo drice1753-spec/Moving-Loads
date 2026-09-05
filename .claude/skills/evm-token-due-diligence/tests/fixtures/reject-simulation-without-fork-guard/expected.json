@@ -17,21 +17,27 @@
     "E-META-REPORT",
     "E-SCOPE-TARGET",
     "E-SCOPE-RUNTIME",
+    "E-SCOPE-ADDRESS",
     "E-REPORT-MISSING",
     "E-REPORT-HASH",
     "E-REPORT-IDENTITY",
     "E-REPORT-TARGET-ABSENT",
     "E-REPORT-SECTIONS",
+    "E-REPORT-RATINGS",
+    "E-REPORT-VERDICT",
     "E-CHECK-CORE-MISSING",
     "E-CHECK-STATUS",
+    "E-CHECK-DISCOVERY-ONLY",
     "E-EVIDENCE-DANGLING",
     "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-UNLINKED",
     "E-FINDING-CHAIN",
+    "E-FINDING-EVIDENCE-TYPE",
     "E-RATING-MISSING",
     "E-RATING-UNKNOWN-AS-LOW",
     "E-RATING-CRITICAL-AVERAGED",
     "E-DECL-SIGNING",
     "E-MODE-MISMATCH"
   ],
-  "notes": "simulation.used is true and simulation_counterfactual evidence exists, but fork_verified_disposable is false (fork_guard.py attestation absent)."
+  "notes": "simulation.used is true and simulation_counterfactual evidence exists, but fork_verified_disposable is false (fork_guard.py attestation absent). W-DECL-FORK-ATTESTATION is expected as a warning because fork_attestation_path is null."
 }

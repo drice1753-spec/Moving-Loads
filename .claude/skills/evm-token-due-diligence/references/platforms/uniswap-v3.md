@@ -150,9 +150,11 @@ Principal leaves a v3 position only through `decreaseLiquidity` (NFPM) or `burn`
    `unlock`, `rescue`/`recover`, `execute`/arbitrary call, `migrate`, `transferLock`, and proxy slots
    (`B-LOCKER-AUTH`). Two v3-specific traps: (a) a beneficiary `collect` right moves fees, not principal,
    BUT a locker that also forwards `decreaseLiquidity` to the beneficiary is a full removal path (decrease
-   credits `tokensOwed`, collect drains them); (b) `getApproved(tokenId)` may be non-zero or the locker may
-   have an operator set BEFORE it received the NFT - approvals are cleared on transfer in ERC-721, but
-   operators (`isApprovedForAll(locker, X)`) persist and are set by the locker's own code.
+   credits `tokensOwed`, collect drains them); (b) the per-token approval is cleared by the ERC-721
+   transfer into the locker, so a non-zero `getApproved(tokenId)` at P1 was set by the locker's own code
+   AFTER receipt (find the selector that reaches `approve`); operator approvals are per OWNER
+   (`isApprovedForAll(locker, X)`), survive transfers, and may have been set before the locker ever held
+   this id - read both at P1 and replay `ApprovalForAll` with the locker as owner.
 5. Write the path statement per position: `holder/approved/operator -> function -> effect -> earliest
    time`. "No current executable removal path found at the pinned block" requires every id resolved,
    every approval and operator read, the locker admin surface read, and no unlock before P1.
@@ -172,8 +174,11 @@ ranges says nothing about how much quote asset a seller can actually receive.
   consumes `token1` held by positions at or below the current tick; when the target is `token1` the sale
   is `oneForZero` (tick rises) and consumes `token0` held by positions at or above the current tick.
   Exit depth = quote asset available in that direction, position by position, in tick order.
-- A one-sided launch position (target only, from an initial tick up to `MAX_TICK`) holds NO quote asset
-  until buyers have pushed the price into the range; before that, sells have no depth from it.
+- A one-sided launch position holds only the target: when the target is `token0` it spans
+  [initialTick, MAX_TICK] ABOVE the current price; when the target is `token1` it spans
+  [MIN_TICK, initialTick] BELOW the current price (numeric address order decides the side, so it varies
+  per chain and per quote asset). In both cases it holds NO quote asset until buyers have pushed the
+  price into the range; before that, sells have no depth from it. Read `token0()` first.
 - `B-RANGE` records, per canonical position: tickLower, tickUpper, current tick, in/out of range, and the
   direction in which it provides depth. Hand the per-position composition to surface C as the basis for
   the size ladder; note that any tick crossing changes it (stale condition).

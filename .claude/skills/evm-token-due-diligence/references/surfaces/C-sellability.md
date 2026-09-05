@@ -97,9 +97,21 @@ with decimals and as a share of the pool's token-side depth.
    zero-liquidity; v4 hook or manager errors), hook revert (v4), quoter unsupported (fee-on-transfer or
    rebasing tokens on quoters that assume conservation; non-standard pools), transfer returned `false`
    without revert. To separate "the quoter cannot model it" (a coverage note) from "the transfer path
-   reverts for ordinary holders" (a finding), run a read-only `eth_call` of `transfer(address,uint256)`
-   with the `from` field set to a real ordinary holder and `to` set to the pool at P1; no key is used,
-   nothing is signed. Repeat with an exempt wallet as `from` to show differential treatment.
+   reverts for ordinary holders" (a finding), run a read-only `eth_call` whose call object is
+   `{"from": <ordinary holder>, "to": <token contract>, "data": transfer(<pool address>, <amount>)}` at
+   the P1 block hex: the TOKEN is the callee and the pool is only the recipient argument (a call sent
+   to the pool itself reverts for unrelated reasons and manufactures a false honeypot finding).
+   `rpc_probe.py` cannot set `from`; use the client directly and preserve the call object as the artifact:
+   ```python
+   import sys; sys.path.insert(0, "<skill-root>/scripts")
+   from ddcore import RpcClient, RpcCoverageError, encode_static, selector
+   data = selector("transfer(address,uint256)") + encode_static([("address", pool), ("uint", amount)]).hex()
+   call = [{"from": holder, "to": token, "data": data}, p1_block_hex]
+   try: ret = RpcClient(url).call("eth_call", call)                       # 32-byte bool on success
+   except RpcCoverageError as e: ret = ("REVERT" if e.execution_failure else "LIMITATION", e.message)
+   ```
+   No key is used, nothing is signed. A revert (`execution_failure`) is the finding's evidence; any other
+   error is a coverage limitation. Repeat with an exempt wallet as `from` to show differential treatment.
 8. `C-ROUTE-DEPENDENCY` - state what the exit depends on: which pool(s) (and their `B-PRINCIPAL`
    status), which router or quoter contract, which hook, and whether the quote asset is a raw asset, a
    wrapped native, a bridged representation or a synthetic claim; a removable pool or an admin-settable
@@ -109,17 +121,57 @@ with decimals and as a share of the pool's token-side depth.
    ```
    python3 <skill-root>/scripts/fork_guard.py --rpc http://127.0.0.1:8545 --expect-chain-id N --expect-fork-block <P1 block> --out attestation.json
    ```
-   Proceed only on exit 0. Use synthetic accounts funded on the fork (the fork tooling's own faucet or
-   impersonation features; `ddcore.RpcClient` refuses non-read methods by design, so simulation writes
-   go through the fork tool, never through the diligence client and never to a real endpoint). A
-   decisive result requires ALL of: a successful receipt (status `0x1`); the intended underlying-asset
+   Proceed only on exit 0, and only against the exact URL the guard attested (`FORK` below; never
+   `EVM_DD_RPC_URL`). `ddcore.RpcClient` refuses non-read methods by design, so the writes go through a
+   separate "fork writer" that speaks JSON-RPC directly to the attested fork. No key exists anywhere: the
+   fork impersonates a synthetic address, funds it, and seeds its token balance by writing the balance
+   slot (slot derivation as in surface D step 2, confirmed with `balanceOf` before use). Fill the
+   placeholders, then run it once per tested size:
+   ```python
+   # fork_writer.py - COUNTERFACTUAL writes, only to the disposable fork that fork_guard.py just attested.
+   # Direct JSON-RPC via urllib; never ddcore.RpcClient (read-only by design), never a real endpoint, never a key.
+   import json, sys, urllib.request
+   sys.path.insert(0, "<skill-root>/scripts"); from ddcore import encode_static, keccak256_hex, selector
+   FORK = "http://127.0.0.1:8545"                       # the exact --rpc value fork_guard.py accepted
+   CHAIN_ID, TOKEN, QUOTE, ROUTER = N, "0x<token>", "0x<quote asset>", "0x<router>"
+   BAL_SLOT, AMOUNT, SWAP_CALLDATA = <balances slot index>, <size in base units>, "0x<calldata of the C-QUOTE route>"
+   att = json.load(open("attestation.json"))
+   assert att["fork_verified_disposable"] is True and att["fork_chain_id"] == CHAIN_ID, "run fork_guard.py first"
+   def rpc(method, params):
+       body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+       r = json.load(urllib.request.urlopen(urllib.request.Request(FORK, body, {"content-type": "application/json"}), timeout=60))
+       if "error" in r: raise SystemExit(f"{method}: {r['error']}")
+       return r["result"]
+   assert int(rpc("eth_chainId", []), 16) == CHAIN_ID
+   SYN = "0x" + "11" * 20                               # synthetic account: no private key exists; the fork impersonates it
+   bal = lambda tok, who: int(rpc("eth_call", [{"to": tok, "data": selector("balanceOf(address)") + encode_static([("address", who)]).hex()}, "latest"]), 16)
+   rpc("anvil_setBalance", [SYN, hex(10**18)]); rpc("anvil_impersonateAccount", [SYN])
+   rpc("anvil_setStorageAt", [TOKEN, keccak256_hex(encode_static([("address", SYN), ("uint", BAL_SLOT)])), "0x" + hex(AMOUNT)[2:].rjust(64, "0")])
+   assert bal(TOKEN, SYN) == AMOUNT, "wrong balances slot index: derive it as in surface D step 2"
+   before = (bal(TOKEN, SYN), bal(QUOTE, SYN))
+   send = lambda to, data: rpc("eth_getTransactionReceipt", [rpc("eth_sendTransaction", [{"from": SYN, "to": to, "data": data, "gas": hex(1_500_000)}])])
+   send(TOKEN, selector("approve(address,uint256)") + encode_static([("address", ROUTER), ("uint", AMOUNT)]).hex())
+   rcpt = send(ROUTER, SWAP_CALLDATA)
+   after = (bal(TOKEN, SYN), bal(QUOTE, SYN))
+   print(json.dumps({"counterfactual": True, "fork_block": att["fork_block"], "tx": rcpt["transactionHash"], "status": rcpt["status"],
+                     "token_delta": after[0] - before[0], "quote_delta": after[1] - before[1], "gas_used": rcpt["gasUsed"]}))
+   ```
+   Hardhat forks expose the same calls as `hardhat_setBalance` / `hardhat_impersonateAccount` /
+   `hardhat_setStorageAt`; a native quote asset is read with `eth_getBalance` and its delta corrected for
+   gas. Foundry `cast` is an optional alternative for the same writes (`cast rpc --rpc-url $FORK
+   anvil_setBalance ...`, `cast send --rpc-url $FORK --unlocked --from $SYN ...`, `cast receipt
+   --rpc-url $FORK <tx>`, `cast call --rpc-url $FORK <token> 'balanceOf(address)' $SYN`), always against
+   the attested URL. The printed JSON line is the `simulation_counterfactual` artifact. A decisive result
+   requires ALL of: a successful receipt (status `0x1`); the intended underlying-asset
    balance delta at the synthetic account (quote asset actually received, not a wrapped or synthetic
    substitute unless that is the stated target), reconciled against the quote and fees; the route and
    costs explained (pool, fee, tax, gas). A success flag, a return value, or an emitted `Swap` event alone
    is insufficient. Record `declarations.simulation` (`used`, `fork_type`, `fork_verified_disposable`,
    `fork_attestation_path`, `fork_chain_id`, `fork_block`, `synthetic_accounts_only`,
    `results_labeled_counterfactual`) and evidence type `simulation_counterfactual` with
-   `counterfactual: true`; the validator rejects simulation evidence without these (E-DECL-FORK).
+   `counterfactual: true`; the validator rejects simulation evidence without these or with
+    `fork_chain_id` != the target chain id (E-DECL-FORK), and warns when `fork_attestation_path` is null
+    (W-DECL-FORK-ATTESTATION, an error under `--strict`).
 10. Write the rows: the quote table as evidence (`rpc_state`, one row per size with the exact call
     object), the historical sell as `receipt` + `log_decoded` (+ `trace` where a native leg is involved),
     failures as findings with the taxonomy class, and the rating from the holder-sized results.
@@ -136,15 +188,15 @@ with decimals and as a share of the pool's token-side depth.
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| C-HIST-SELL | A non-privileged address sold the token for a quote asset that reached a non-pool recipient, proven at receipt level | receipt status 0x1 + decoded token-in and quote-out legs + gas + sender's non-exempt status at that block | `receipt`, `log_decoded`, `trace` | none for the historical fact; relevance decays with any A/B change after that block |
-| C-QUOTE | Read-only quotes at P1 at the small size and each holder-sized amount, with route, fees, per-unit degradation | one `eth_call` artifact per size at the pinned block + cross-check with direct pool math | `rpc_state` | any block after P1 (re-pin for "now") |
-| C-SIM-EXIT | A synthetic account's sale on a verified fork produced a successful receipt AND the intended underlying-asset delta, with route and costs explained (counterfactual) | fork attestation + receipt + balance deltas before/after + reconciliation to the quote | `simulation_counterfactual` | fork block differs from P1; any A/B change |
-| C-TAX-NET | Net-of-tax quote at each size and the effective gross-to-quote rate | tax rate at P1 (surface A) + net quotes | `rpc_state` | tax setter call after P1 |
-| C-ROUTE-DEPENDENCY | The exit depends on named pools, router/quoter, hook and quote asset, each with its custody or authority status | route table with B-PRINCIPAL/B-HOOK-AUTH cross-references and quote-asset classification | `rpc_state`, `manual_note` (cross-reference) | any B stale condition; quote-asset depeg or bridge halt |
-| C-TRANSFER-PATH | An ordinary holder's `transfer` to the pool at P1 does not revert, and the treatment equals an exempt wallet's | `eth_call` of `transfer` with `from` = ordinary holder and = exempt wallet at P1, with revert data | `rpc_state` | any A-RESTRICT/A-TAX setter call |
-| C-FAILURE-CLASS | Each observed failure is classified by the taxonomy with supporting reads | the relevant flag/limit/mapping read at P1 per failure | `rpc_state`, `bytecode` | setter call after P1 |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| C-HIST-SELL | sellability_exit_depth | A non-privileged address sold the token for a quote asset that reached a non-pool recipient, proven at receipt level | receipt status 0x1 + decoded token-in and quote-out legs + gas + sender's non-exempt status at that block | `receipt`, `log_decoded`, `trace` | none for the historical fact; relevance decays with any A/B change after that block |
+| C-QUOTE | sellability_exit_depth | Read-only quotes at P1 at the small size and each holder-sized amount, with route, fees, per-unit degradation | one `eth_call` artifact per size at the pinned block + cross-check with direct pool math | `rpc_state` | any block after P1 (re-pin for "now") |
+| C-SIM-EXIT | sellability_exit_depth | A synthetic account's sale on a verified fork produced a successful receipt AND the intended underlying-asset delta, with route and costs explained (counterfactual) | fork attestation + receipt + balance deltas before/after + reconciliation to the quote | `simulation_counterfactual` | fork block differs from P1; any A/B change |
+| C-TAX-NET | sellability_exit_depth | Net-of-tax quote at each size and the effective gross-to-quote rate | tax rate at P1 (surface A) + net quotes | `rpc_state` | tax setter call after P1 |
+| C-ROUTE-DEPENDENCY | sellability_exit_depth | The exit depends on named pools, router/quoter, hook and quote asset, each with its custody or authority status | route table with B-PRINCIPAL/B-HOOK-AUTH cross-references and quote-asset classification | `rpc_state`, `manual_note` (cross-reference) | any B stale condition; quote-asset depeg or bridge halt |
+| C-TRANSFER-PATH | sellability_exit_depth | An ordinary holder's `transfer` to the pool at P1 does not revert, and the treatment equals an exempt wallet's | `eth_call` of `{from: holder, to: token, data: transfer(pool, amount)}` at P1 for an ordinary holder and for an exempt wallet, with the call objects and any revert data | `rpc_state` | any A-RESTRICT/A-TAX setter call |
+| C-FAILURE-CLASS | sellability_exit_depth | Each observed failure is classified by the taxonomy with supporting reads | the relevant flag/limit/mapping read at P1 per failure | `rpc_state`, `bytecode` | setter call after P1 |
 
 ## Common false positives and negatives
 

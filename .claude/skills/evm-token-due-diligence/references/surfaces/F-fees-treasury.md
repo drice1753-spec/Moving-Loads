@@ -88,11 +88,11 @@ its own pin (P2...). Use base units (integers) throughout; convert for display o
    inside a contract call is invisible to `Transfer` logs: use `trace_transaction` /
    `debug_traceTransaction` for internal transfers, and record the limitation if no trace API exists.
 7. `F-TREASURY` - reconcile each material asset per recipient with `scripts/reconcile.py`. One flows
-   file per (chain, recipient, asset). The format the tool accepts (one row of each direction is shown
-   together for the shape; a real file holds one asset, and `gas` rows appear only in the native file):
+   file per (chain, recipient, asset). The format the tool accepts, one asset per file - an ERC-20 file
+   first, then the native file, which is the only place `gas` rows are accepted:
    ```json
    {
-     "asset": {"chain_id": 1, "address": "0x<token or WETH> | native", "symbol": "as resolved"},
+     "asset": {"chain_id": 1, "address": "0x<token or WETH>", "is_native": false, "symbol": "as resolved", "decimals": 18},
      "opening": {"balance": "123450000000000000000", "block": 20000000},
      "closing": {"balance": "98700000000000000000", "block": 20100000},
      "rows": [
@@ -101,29 +101,52 @@ its own pin (P2...). Use base units (integers) throughout; convert for display o
        {"tx": "0x..", "status": "success", "direction": "out", "amount": "70000000000000000000",
         "block": 20050000, "counterparty": "0x<router>", "note": "Swap to quote; output in WETH file"},
        {"tx": "0x..", "status": "reverted", "direction": "out", "amount": "1000000000000000000",
-        "block": 20050001, "counterparty": "0x..", "note": "excluded by tool: reverted"},
-       {"tx": "0x..", "status": "success", "direction": "transform_out", "amount": "2000000000000000000",
-        "block": 20060000, "counterparty": "0x<WETH>", "note": "wrap: paired with transform_in in WETH file"},
-       {"tx": "0x..", "status": "success", "direction": "gas", "amount": "310000000000000",
-        "block": 20060000, "counterparty": "0x0000000000000000000000000000000000000000", "note": "native only"},
+        "block": 20050001, "counterparty": "0x..", "note": "excluded by tool: reverted; its gas is a success gas row in the native file"},
+       {"tx": "0x..", "status": "success", "direction": "transform_in", "amount": "2000000000000000000",
+        "block": 20060000, "counterparty": "0x<WETH>", "note": "wrap: paired by tx hash with transform_out in the native file"},
        {"tx": "0x..", "status": "success", "direction": "adjustment", "amount": "15000000000000000",
         "block": 20070000, "counterparty": "0x<token>", "note": "explained delta (e.g. fee-on-transfer haircut), receipt cited"}
      ]
    }
    ```
-   The `asset` object is a descriptor for the reader: its `chain_id` is the integer read from
-   `eth_chainId` and pinned (the `1` above is a placeholder - verify at use time via RPC), and the
-   block numbers are placeholders. Run it per file; the exit code is the tolerance test:
+   ```json
+   {
+     "asset": {"chain_id": 1, "address": null, "is_native": true, "symbol": "<native currency label>", "decimals": 18},
+     "opening": {"balance": "5000000000000000000", "block": 20000000},
+     "closing": {"balance": "2999480000000000000", "block": 20100000},
+     "rows": [
+       {"tx": "0x..", "status": "success", "direction": "transform_out", "amount": "2000000000000000000",
+        "block": 20060000, "counterparty": "0x<WETH>", "note": "wrap: same tx as the WETH file's transform_in"},
+       {"tx": "0x..", "status": "success", "direction": "gas", "amount": "310000000000000",
+        "block": 20060000, "counterparty": null, "note": "gasUsed x effectiveGasPrice"},
+       {"tx": "0x..", "status": "success", "direction": "gas", "amount": "210000000000000",
+        "block": 20050001, "counterparty": null, "note": "gas of the reverted swap: spent on revert, so status success"}
+     ]
+   }
+   ```
+   The `asset` descriptor is exactly `{chain_id, address, is_native, symbol, decimals}`: `chain_id` is
+   the integer read from `eth_chainId` and pinned (the `1` above is a placeholder - verify at use time
+   via RPC); `address` is the ERC-20 contract, or `null` with `is_native: true` for the native asset;
+   `is_native` decides whether `gas` rows are accepted. The tool exits 2 on any other shape. Block
+   numbers and balances are placeholders. Run it per file; the exit code is the tolerance test:
    ```
    python3 <skill-root>/scripts/reconcile.py --flows flows-treasury-WETH.json --tolerance 1000000000000000 --json
    ```
    Rules the tool enforces and the analyst must respect when building rows: amounts are integer base
-   units as strings; `reverted` rows are excluded from every sum (a reverted tx moved nothing; list it
-   only so the reader sees it was considered); `gas` rows exist only in the native-asset file;
-   `transform_out`/`transform_in` describe a wrap or unwrap (ETH -> WETH is `transform_out` in the
-   native file and `transform_in` in the WETH file, same tx) so the same value is never counted as both
-   spending and income; `adjustment` rows carry an explained delta with the receipt that explains it;
-   the tool reports the unexplained delta and whether it exceeds `--tolerance`, and exits 1 if it does.
+   units as strings; `reverted` VALUE rows are excluded from every sum (a reverted tx moved nothing; list
+   it so the reader sees it was considered), but gas is spent even on revert, so the gas of a reverted tx
+   is a separate `gas` row with `status: "success"` in the native file (a `gas` row marked `reverted` is
+   excluded and the tool warns `W-GAS-ROW-REVERTED`); `gas` rows exist only in the native-asset file
+   (`is_native: true`); `transform_out`/`transform_in` describe a wrap or unwrap (ETH -> WETH is
+   `transform_out` in the native file and `transform_in` in the WETH file, same tx hash - run both files
+   in one invocation, `--flows flows-weth.json flows-native.json`, so the tool pairs the legs across the
+   files; a leg with no counter-leg in any supplied file is warned about while still being applied, and a
+   single-file run lists every leg as unpaired) so the same value is never counted as both spending and
+   income; `adjustment`
+   rows carry an explained delta with the receipt that explains it; the tool prints the identity
+   `opening + inflows + adjustments = outflows + closing + unexplained` (JSON field
+   `unexplained_delta = declared_closing - computed_closing`, sign stated on the next line), reports
+   whether it exceeds `--tolerance`, and exits 1 if it does.
    Opening and closing balances are `eth_getBalance` (native) or `balanceOf` (`eth_call`) at the two
    stated blocks, both preserved as `rpc_state` evidence. Burns are `out` rows with the burn address as
    counterparty; bridge legs are `out` rows on the source ledger and `in` rows on the destination
@@ -161,17 +184,17 @@ its own pin (P2...). Use base units (integers) throughout; convert for display o
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| F-FEES | Every fee source is mapped: basis, denomination, split, escrow, claim authority, recipients, configurability, subsequent use | config reads at P1 for each source + one realized-flow receipt per source | `rpc_state`, `receipt`, `log_decoded` | any fee/recipient setter call, upgrade of a fee contract |
-| F-TREASURY | Each material asset of each fee recipient/treasury reconciles within the stated tolerance over the stated range | flows file + `reconcile.py` output + opening/closing reads | `rpc_state`, `receipt`, `log_decoded`, `trace` | any tx touching the recipient after the closing block |
-| F-BASIS-VS-BUCKET | Every percentage in the report names its base (gross vs fee bucket vs share) | one computed example from a real receipt in range | `receipt`, `log_decoded` | fee tier or split change |
-| F-CLAIM-AUTH | Who can move each escrow, and to a fixed or arbitrary destination | claim function guard + `to` parameter semantics + holder reads at P1 | `bytecode`, `rpc_state`, `source_verified` | role/owner change, upgrade |
-| F-BRIDGE-LEGS | Each bridge leg is matched end to end (source receipt, identifier, destination pin, recipient, delivered amount, destination receipt) | all six elements per leg | `receipt`, `log_decoded` (both chains) | none for matched legs; unmatched legs resolve when destination evidence appears |
-| F-COMMINGLING | Attribution stops at commingling and the report says so, with the amount reaching it | the receiving tx(s) + the reason the address is commingled | `receipt`, `explorer` (label, corroboration) | never |
-| F-REALIZED-RATE | Realized fee rate over the range equals the configured rate, or the difference is explained by receipts | Swap volume sum + fee sum per asset in range | `log_decoded`, `receipt` | setter call, exemption change |
-| F-RECIPIENT-CONFIG | Each recipient's type, owner/proxy status, splitter payees and recipient setter are resolved | reads at P1 per recipient | `rpc_state`, `rpc_storage` | setter call, ownership transfer |
-| F-SUBSEQUENT-USE | Outflows are classified by receipt (swap, buyback, burn, distribution, bridge, deposit, gas, other) | one receipt per outflow above threshold; traces for internal native value | `receipt`, `trace`, `log_decoded` | new outflows after the closing block |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| F-FEES | admin_treasury_reward_custody | Every fee source is mapped: basis, denomination, split, escrow, claim authority, recipients, configurability, subsequent use | config reads at P1 for each source + one realized-flow receipt per source | `rpc_state`, `receipt`, `log_decoded` | any fee/recipient setter call, upgrade of a fee contract |
+| F-TREASURY | admin_treasury_reward_custody | Each material asset of each fee recipient/treasury reconciles within the stated tolerance over the stated range | flows file + `reconcile.py` output + opening/closing reads | `rpc_state`, `receipt`, `log_decoded`, `trace` | any tx touching the recipient after the closing block |
+| F-BASIS-VS-BUCKET | admin_treasury_reward_custody | Every percentage in the report names its base (gross vs fee bucket vs share) | one computed example from a real receipt in range | `receipt`, `log_decoded` | fee tier or split change |
+| F-CLAIM-AUTH | admin_treasury_reward_custody | Who can move each escrow, and to a fixed or arbitrary destination | claim function guard + `to` parameter semantics + holder reads at P1 | `bytecode`, `rpc_state`, `source_verified` | role/owner change, upgrade |
+| F-BRIDGE-LEGS | admin_treasury_reward_custody | Each bridge leg is matched end to end (source receipt, identifier, destination pin, recipient, delivered amount, destination receipt) | all six elements per leg | `receipt`, `log_decoded` (both chains) | none for matched legs; unmatched legs resolve when destination evidence appears |
+| F-COMMINGLING | admin_treasury_reward_custody | Attribution stops at commingling and the report says so, with the amount reaching it | the receiving tx(s) + the reason the address is commingled | `receipt`, `explorer` (label, corroboration) | never |
+| F-REALIZED-RATE | admin_treasury_reward_custody | Realized fee rate over the range equals the configured rate, or the difference is explained by receipts | Swap volume sum + fee sum per asset in range | `log_decoded`, `receipt` | setter call, exemption change |
+| F-RECIPIENT-CONFIG | admin_treasury_reward_custody | Each recipient's type, owner/proxy status, splitter payees and recipient setter are resolved | reads at P1 per recipient | `rpc_state`, `rpc_storage` | setter call, ownership transfer |
+| F-SUBSEQUENT-USE | admin_treasury_reward_custody | Outflows are classified by receipt (swap, buyback, burn, distribution, bridge, deposit, gas, other) | one receipt per outflow above threshold; traces for internal native value | `receipt`, `trace`, `log_decoded` | new outflows after the closing block |
 
 Statuses follow the manifest rules: `pass` and `finding` need evidence ids; `unknown`/`skipped` need a
 reason with the limitation id when infrastructure caused it. `unknown` is never a pass.

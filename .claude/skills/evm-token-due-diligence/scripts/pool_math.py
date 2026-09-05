@@ -31,7 +31,10 @@ the target chain's factory, compute the address for that event's tokens with thi
 exact match before trusting any other computed address on that chain. Factory addresses are never defaulted
 here: pass the one you verified (eth_getCode non-empty at the pin, and the event topic0 seen in its logs).
 
-Exit codes: 0 ok, 2 usage / invalid input (malformed address, bad checksum, unsorted v4 currencies, ranges).
+Exit codes: 0 ok, 2 usage / invalid input (malformed address, bad checksum, unsorted v4 currencies, a tick
+outside [-887272, 887272], a sqrtPriceX96 outside [MIN_SQRT_RATIO, MAX_SQRT_RATIO], decimals outside 0..255).
+v2-pair / v3-pool sort --token-a/--token-b into token0/token1 and SAY SO ("input order swapped: ...",
+`inputs_reordered` in JSON) so a caller notices the order they gave is not the pool's.
 """
 from __future__ import annotations
 
@@ -109,10 +112,25 @@ def address_int(addr: str) -> int:
 
 def sort_tokens(token_a: str, token_b: str) -> tuple[str, str]:
     """Sort by numeric address value (the ordering every Uniswap factory uses). Rejects identical tokens."""
+    t0, t1, _ = sort_tokens_noted(token_a, token_b)
+    return t0, t1
+
+
+def sort_tokens_noted(token_a: str, token_b: str) -> tuple[str, str, bool]:
+    """(token0, token1, inputs_reordered): the third value is True when token_a sorts AFTER token_b."""
     a, b = checked_address(token_a, "token_a"), checked_address(token_b, "token_b")
     if address_int(a) == address_int(b):
         raise PoolMathError("token_a and token_b are identical addresses")
-    return (a, b) if address_int(a) < address_int(b) else (b, a)
+    if address_int(a) < address_int(b):
+        return a, b, False
+    return b, a, True
+
+
+def checked_decimals(value: Any, label: str) -> int:
+    d = int(value)
+    if not (0 <= d <= 255):
+        raise PoolMathError(f"{label} must be a uint8 (0..255), got {d}")
+    return d
 
 
 def checked_hash32(value: str, label: str) -> bytes:
@@ -137,7 +155,7 @@ def create2_address(factory: str, salt: bytes, init_code_hash: bytes) -> str:
 # --------------------------------------------------------------------------------------
 def v2_pair(factory: str, token_a: str, token_b: str, init_code_hash: Optional[str] = None) -> dict:
     f = checked_address(factory, "factory")
-    t0, t1 = sort_tokens(token_a, token_b)
+    t0, t1, reordered = sort_tokens_noted(token_a, token_b)
     if t0.lower() == ZERO_ADDRESS:
         raise PoolMathError("token0 is the zero address; v2 pairs require non-zero tokens (wrap native first)")
     ich_hex = init_code_hash or UNISWAP_V2_PAIR_INIT_CODE_HASH_DEFAULT
@@ -147,6 +165,7 @@ def v2_pair(factory: str, token_a: str, token_b: str, init_code_hash: Optional[s
     return {
         "kind": "uniswap_v2_pair",
         "factory": f, "token0": t0, "token1": t1,
+        "inputs_reordered": reordered,
         "salt": "0x" + salt.hex(),
         "salt_preimage": "abi.encodePacked(token0, token1) (40 bytes)",
         "init_code_hash": "0x" + ich.hex(),
@@ -159,7 +178,7 @@ def v2_pair(factory: str, token_a: str, token_b: str, init_code_hash: Optional[s
 
 def v3_pool(factory: str, token_a: str, token_b: str, fee: int, init_code_hash: Optional[str] = None) -> dict:
     f = checked_address(factory, "factory")
-    t0, t1 = sort_tokens(token_a, token_b)
+    t0, t1, reordered = sort_tokens_noted(token_a, token_b)
     fee = int(fee)
     if not (0 <= fee < (1 << 24)):
         raise PoolMathError("fee must fit uint24 (0 <= fee < 16777216)")
@@ -171,6 +190,7 @@ def v3_pool(factory: str, token_a: str, token_b: str, fee: int, init_code_hash: 
     return {
         "kind": "uniswap_v3_pool",
         "factory": f, "token0": t0, "token1": t1, "fee": fee,
+        "inputs_reordered": reordered,
         "tick_spacing_hint": V3_FEE_TIER_HINTS.get(fee),
         "tick_spacing_hint_note": "verify at use time via factory.feeAmountTickSpacing(fee); 0 means the tier is not enabled",
         "salt": "0x" + salt.hex(),
@@ -262,16 +282,19 @@ def tick_to_price(tick: int, decimals0: int, decimals1: int) -> dict:
     tick = int(tick)
     warnings: list[str] = []
     if not (MIN_TICK <= tick <= MAX_TICK):
-        warnings.append(f"tick {tick} is outside TickMath range [{MIN_TICK}, {MAX_TICK}]")
+        # checked before any arithmetic: a tick outside TickMath cannot exist in a pool, and a huge one would overflow Decimal
+        raise PoolMathError(f"tick {tick} is outside TickMath range [{MIN_TICK}, {MAX_TICK}]; no pool can hold this tick")
+    decimals0 = checked_decimals(decimals0, "decimals0")
+    decimals1 = checked_decimals(decimals1, "decimals1")
     with localcontext() as ctx:
         ctx.prec = DECIMAL_PRECISION
         raw = Decimal("1.0001") ** tick
-        human = raw * _dec_pow10(int(decimals0) - int(decimals1))
+        human = raw * _dec_pow10(decimals0 - decimals1)
         inverse = Decimal(1) / human if human != 0 else None
         sqrt_approx = (raw.sqrt() * Decimal(Q96)).to_integral_value()
     return {
         "kind": "v3_tick_to_price",
-        "tick": tick, "decimals0": int(decimals0), "decimals1": int(decimals1),
+        "tick": tick, "decimals0": decimals0, "decimals1": decimals1,
         "price_raw_token1_per_token0": _fmt(raw),
         "price_human_token1_per_token0": _fmt(human),
         "price_human_token0_per_token1": _fmt(inverse) if inverse is not None else None,
@@ -289,16 +312,18 @@ def sqrtprice_to_price(sqrt_price_x96: int, decimals0: int, decimals1: int) -> d
     if sp <= 0:
         raise PoolMathError("sqrt_price_x96 must be a positive integer")
     if not (MIN_SQRT_RATIO <= sp <= MAX_SQRT_RATIO):
-        warnings.append(f"sqrt_price_x96 {sp} is outside TickMath range [{MIN_SQRT_RATIO}, {MAX_SQRT_RATIO}]")
+        raise PoolMathError(f"sqrt_price_x96 {sp} is outside TickMath range [{MIN_SQRT_RATIO}, {MAX_SQRT_RATIO}]; no pool can hold this price")
+    decimals0 = checked_decimals(decimals0, "decimals0")
+    decimals1 = checked_decimals(decimals1, "decimals1")
     with localcontext() as ctx:
         ctx.prec = DECIMAL_PRECISION
         raw = Decimal(sp * sp) / Decimal(Q192)  # square as an exact int first; Decimal(sp)*Decimal(sp) would round at 50 digits
-        human = raw * _dec_pow10(int(decimals0) - int(decimals1))
+        human = raw * _dec_pow10(decimals0 - decimals1)
         inverse = Decimal(1) / human if human != 0 else None
         tick_approx = int((raw.ln() / Decimal("1.0001").ln()).to_integral_value(rounding="ROUND_FLOOR")) if raw > 0 else None
     return {
         "kind": "v3_sqrtprice_to_price",
-        "sqrt_price_x96": str(sp), "decimals0": int(decimals0), "decimals1": int(decimals1),
+        "sqrt_price_x96": str(sp), "decimals0": decimals0, "decimals1": decimals1,
         "price_raw_token1_per_token0": _fmt(raw),
         "price_human_token1_per_token0": _fmt(human),
         "price_human_token0_per_token1": _fmt(inverse) if inverse is not None else None,
@@ -324,6 +349,16 @@ def _init_code_line(res: dict) -> str:
     return f"init_code_hash used: {res['init_code_hash']} {INIT_CODE_HASH_WARNING}"
 
 
+def _order_note(res: dict) -> str:
+    return f"input order swapped: token0={res['token0']} token1={res['token1']}"
+
+
+def _order_lines(res: dict) -> list[str]:
+    if res.get("inputs_reordered"):
+        return [f"note    : {_order_note(res)} (token_a/token_b sorted by numeric address value; use token0/token1 from here on)"]
+    return []
+
+
 def render_human(res: dict) -> str:
     k = res["kind"]
     lines: list[str] = []
@@ -333,6 +368,7 @@ def render_human(res: dict) -> str:
             f"factory : {res['factory']}",
             f"token0  : {res['token0']}",
             f"token1  : {res['token1']}",
+            *_order_lines(res),
             f"salt    : {res['salt']}   [{res['salt_preimage']}]",
             f"pair    : {res['pair']}",
             _init_code_line(res),
@@ -345,6 +381,7 @@ def render_human(res: dict) -> str:
             f"factory : {res['factory']}",
             f"token0  : {res['token0']}",
             f"token1  : {res['token1']}",
+            *_order_lines(res),
             f"fee     : {res['fee']} (tick spacing hint: {hint if hint is not None else 'unknown tier'}; {res['tick_spacing_hint_note']})",
             f"salt    : {res['salt']}   [{res['salt_preimage']}]",
             f"pool    : {res['pool']}",
@@ -470,12 +507,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_USAGE
     try:
         res = run(args)
-    except (PoolMathError, ValueError) as e:
+    except (PoolMathError, ValueError, ArithmeticError) as e:  # ArithmeticError: decimal overflow on absurd input
         print(f"error: {e}", file=sys.stderr)
         return EXIT_USAGE
     if args.json:
         if res["kind"] in ("uniswap_v2_pair", "uniswap_v3_pool"):
             res["init_code_hash_notice"] = _init_code_line(res)
+            res["order_notice"] = _order_note(res) if res.get("inputs_reordered") else None
         print(json.dumps(res, indent=2))
     else:
         print(render_human(res))

@@ -7,15 +7,18 @@ Provides:
   * minimal ABI word encoding/decoding for static types and strings
   * EIP-1967 / EIP-1822 storage slots and the empty-code hash
   * a read-only JSON-RPC client with a method allowlist, a response cache keyed by
-    (host, method, params), URL credential redaction, and coverage-limitation error
-    classification (timeouts, rate limits, DNS failures are *coverage* problems,
-    never token findings)
+    [chain_id, scheme, host, port, redacted path, method, params] (the chain id is the
+    LIVE eth_chainId the caller binds with RpcClient.set_chain_id; nothing is cached before
+    that), URL credential redaction, and coverage-limitation error classification
+    (timeouts, rate limits, DNS failures, malformed HTTP are *coverage* problems, never
+    token findings)
 
 Python 3.10+ standard library only. No web3, no requests.
 """
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -35,9 +38,10 @@ __all__ = [
     "is_hex32", "looks_like_placeholder_hash", "hex_to_int", "int_to_hex",
     "EMPTY_CODE_HASH", "EIP1967_IMPLEMENTATION_SLOT", "EIP1967_ADMIN_SLOT", "EIP1967_BEACON_SLOT",
     "EIP1822_LOGIC_SLOT", "ZERO_ADDRESS",
-    "encode_word", "encode_static", "decode_uint", "decode_address", "decode_abi_string",
+    "encode_word", "encode_static", "decode_uint", "decode_address", "decode_abi_string", "decode_abi_string_detail",
     "redact_url", "RpcClient", "RpcPolicyError", "RpcCoverageError", "ResponseCache", "READ_ONLY_METHODS",
-    "iso_utc", "parse_iso_utc", "sha256_file", "sha256_bytes",
+    "NON_RETRIED_KINDS", "EXECUTION_FAILURE_MARKERS", "CACHE_FORMAT_VERSION",
+    "iso_utc", "parse_iso_utc", "sha256_file", "sha256_bytes", "TimestampRangeError", "MAX_UNIX_TIMESTAMP",
 ]
 
 # --------------------------------------------------------------------------------------
@@ -195,6 +199,8 @@ def looks_like_placeholder_hash(s: Any) -> tuple[bool, Optional[str]]:
 
 
 def hex_to_int(s: Any) -> int:
+    if isinstance(s, bool):  # bool is an int subclass; JSON true/false is never a quantity
+        raise ValueError(f"not a hex quantity: {s!r} (boolean)")
     if isinstance(s, int):
         return s
     if not isinstance(s, str) or not re.match(r"^0x[0-9a-fA-F]+$", s):
@@ -274,44 +280,78 @@ def decode_address(data: Any) -> str:
     return to_checksum_address("0x" + b[12:32].hex())
 
 
-def decode_abi_string(data: Any) -> tuple[Optional[str], str]:
-    """Decode an ABI `string` return. Returns (value, status) with status in
-    {'resolved','nonstandard','unresolved'}. A bare 32-byte word is treated as a
-    bytes32 'string' (nonstandard, e.g. some legacy tokens). Empty return data is unresolved."""
+def decode_abi_string_detail(data: Any) -> tuple[Optional[str], str, Optional[str]]:
+    """Decode an ABI `string` return. Returns (value, status, reason) with status in
+    {'resolved','nonstandard','unresolved'}; reason explains any status other than resolved.
+    A bare 32-byte word is treated as a bytes32 'string' (nonstandard, e.g. some legacy
+    tokens). Empty return data, an offset/length outside the data, an empty string and
+    non-printable/control characters are all unresolved: a value that would be demanded
+    verbatim in a report must be a real, printable string."""
     try:
         b = _to_bytes(data)
     except Exception:
-        return None, "unresolved"
+        return None, "unresolved", "return data is not hex"
     if len(b) == 0:
-        return None, "unresolved"
+        return None, "unresolved", "empty return data"
     if len(b) == 32:
         raw = b.rstrip(b"\x00")
         try:
             txt = raw.decode("utf-8")
         except UnicodeDecodeError:
-            return None, "unresolved"
-        if not txt or not txt.isprintable():
-            return None, "unresolved"
-        return txt, "nonstandard"
+            return None, "unresolved", "single 32-byte word is not UTF-8 text"
+        if not txt:
+            return None, "unresolved", "single 32-byte word is all zero"
+        if not txt.isprintable():
+            return None, "unresolved", "single 32-byte word decodes to non-printable text"
+        return txt, "nonstandard", "returned a single 32-byte word (bytes32-style), not an ABI string; value decoded as UTF-8 text"
     if len(b) < 64:
-        return None, "unresolved"
+        return None, "unresolved", f"return data is {len(b)} bytes: neither one word nor an ABI string (offset + length words)"
+    offset = int.from_bytes(b[:32], "big")
+    if offset + 32 > len(b):
+        return None, "unresolved", "ABI string offset word points past the return data"
+    length = int.from_bytes(b[offset:offset + 32], "big")
+    if offset + 32 + length > len(b):
+        return None, "unresolved", "ABI string length word exceeds the return data"
+    raw = b[offset + 32: offset + 32 + length]
     try:
-        offset = int.from_bytes(b[:32], "big")
-        length = int.from_bytes(b[offset:offset + 32], "big")
-        raw = b[offset + 32: offset + 32 + length]
-        if len(raw) != length:
-            return None, "unresolved"
         txt = raw.decode("utf-8", errors="strict")
-    except Exception:
-        return None, "unresolved"
-    return txt, "resolved"
+    except UnicodeDecodeError:
+        return None, "unresolved", "ABI string bytes are not UTF-8"
+    if not txt:
+        return None, "unresolved", "empty string"
+    if not txt.isprintable():
+        return None, "unresolved", "string contains non-printable or control characters"
+    return txt, "resolved", None
+
+
+def decode_abi_string(data: Any) -> tuple[Optional[str], str]:
+    """(value, status) form of decode_abi_string_detail (see it for the rules)."""
+    value, status, _reason = decode_abi_string_detail(data)
+    return value, status
 
 
 # --------------------------------------------------------------------------------------
 # Time / hashing helpers
 # --------------------------------------------------------------------------------------
+MAX_UNIX_TIMESTAMP = 253402300799  # 9999-12-31T23:59:59Z, the last second the canonical format can render
+
+
+class TimestampRangeError(ValueError, OverflowError):
+    """A timestamp that cannot be rendered as a canonical UTC time (negative, past year 9999, or not an
+    integer). Subclasses BOTH ValueError and OverflowError so a caller guarding with either catches it;
+    callers record it as a pin limitation / E-PIN-TIME for that pin instead of aborting."""
+
+
 def iso_utc(ts: int) -> str:
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(ts, bool):
+        raise TimestampRangeError(f"timestamp is a boolean, not an integer: {ts!r}")
+    try:
+        t = int(ts)
+    except (TypeError, ValueError):
+        raise TimestampRangeError(f"timestamp is not an integer: {ts!r}")
+    if t < 0 or t > MAX_UNIX_TIMESTAMP:
+        raise TimestampRangeError(f"timestamp {t} is outside 0..{MAX_UNIX_TIMESTAMP} (1970-01-01..9999-12-31)")
+    return datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_iso_utc(s: str) -> int:
@@ -335,26 +375,56 @@ def sha256_file(path: str) -> str:
 # --------------------------------------------------------------------------------------
 # URL redaction
 # --------------------------------------------------------------------------------------
-_KEYISH = re.compile(r"^[A-Za-z0-9_\-]{20,}$")
+_KEYISH = re.compile(r"^[A-Za-z0-9_\-]{20,}$")            # long opaque token (classic provider key)
+_KEYISH_MIXED = re.compile(r"^[A-Za-z0-9_\-.]{12,}$")     # shorter token with letters AND digits (dots allow JWT-like keys)
+_VERSION_SEG = re.compile(r"^v[0-9]{1,2}$", re.IGNORECASE)  # /v1/<key>, /v2/<key>, /v3/<key> provider layouts
+_HOST_LABEL_KEYISH = re.compile(r"^[A-Za-z0-9]{24,}$")     # key embedded as the first host label
+UNPARSEABLE_URL = "<unparseable-url>"
+
+
+def _segment_is_keyish(seg: str, prev: Optional[str]) -> bool:
+    if not seg:
+        return False
+    if _KEYISH.match(seg):
+        return True
+    if _KEYISH_MIXED.match(seg) and any(c.isalpha() for c in seg) and any(c.isdigit() for c in seg):
+        return True
+    return prev is not None and bool(_VERSION_SEG.match(prev))
+
+
+def _redact_path(path: str) -> str:
+    segs: list[str] = []
+    prev: Optional[str] = None
+    for seg in path.split("/"):
+        segs.append("<redacted>" if _segment_is_keyish(seg, prev) else seg)
+        prev = seg
+    return "/".join(segs)
 
 
 def redact_url(url: str) -> str:
-    """Strip userinfo, key-like path segments and all query values so an endpoint can be
-    recorded in evidence without leaking credentials."""
+    """Strip userinfo, key-like path segments (heuristic: long opaque tokens, letter+digit tokens of
+    12+ characters, anything right after a /vN/ segment), a key-like first host label, and all query
+    values so an endpoint can be recorded in evidence without leaking credentials. Over-redaction is
+    the safe failure mode. Never raises: IPv6 hosts keep their brackets and an unparseable URL (for
+    example a non-numeric port) renders as '<unparseable-url>'."""
+    if not isinstance(url, str):
+        return UNPARSEABLE_URL
     try:
         p = urllib.parse.urlsplit(url)
+        port = p.port  # raises ValueError for a non-numeric or out-of-range port
     except Exception:
-        return "<unparseable-url>"
+        return UNPARSEABLE_URL
     host = p.hostname or ""
-    if p.port:
-        host = f"{host}:{p.port}"
-    segs = []
-    for seg in p.path.split("/"):
-        if seg and _KEYISH.match(seg):
-            segs.append("<redacted>")
-        else:
-            segs.append(seg)
-    path = "/".join(segs)
+    if ":" in host:  # IPv6 literal: urlsplit strips the brackets, an endpoint string needs them back
+        host = f"[{host}]"
+    else:
+        labels = host.split(".")
+        if len(labels) > 1 and _HOST_LABEL_KEYISH.match(labels[0]):
+            labels[0] = "<redacted>"
+            host = ".".join(labels)
+    if port is not None:
+        host = f"{host}:{port}"
+    path = _redact_path(p.path)
     query = ""
     if p.query:
         keys = [k for k, _ in urllib.parse.parse_qsl(p.query, keep_blank_values=True)]
@@ -376,6 +446,15 @@ READ_ONLY_METHODS = frozenset({
     "anvil_nodeInfo", "hardhat_metadata",
 })
 _BLOCK_TAGS = {"latest", "pending", "safe", "finalized", "earliest"}
+# Error kinds that are never retried: the answer will not change (rpc_error covers auth/policy and
+# EVM execution failures; pruned historical state does not reappear; a malformed body is not transient).
+NON_RETRIED_KINDS = frozenset({"rpc_error", "auth", "malformed_response", "rpc_pruned"})
+# Node error messages that mean the EVM executed and failed (a fact about the contract at that block,
+# not an infrastructure problem). Only eth_call/eth_estimateGas errors are classified this way.
+EXECUTION_FAILURE_MARKERS = ("revert", "execution error", "vm exception", "invalid opcode", "out of gas",
+                             "invalid jump", "stack underflow", "stack overflow")
+_EXECUTING_METHODS = ("eth_call", "eth_estimateGas")
+CACHE_FORMAT_VERSION = 2
 
 
 class RpcPolicyError(Exception):
@@ -383,14 +462,20 @@ class RpcPolicyError(Exception):
 
 
 class RpcCoverageError(Exception):
-    """An RPC/infrastructure failure. This is a *coverage limitation*, never a token finding."""
+    """An RPC/infrastructure failure. This is a *coverage limitation*, never a token finding.
+    `execution_failure` is True when the node reports that the EVM ran and failed (eth_call revert):
+    that IS a fact about the contract at the block and is cached like a result. `cached` is True
+    when the error was replayed from the response cache."""
 
-    def __init__(self, kind: str, message: str, method: str = "", params: Any = None):
+    def __init__(self, kind: str, message: str, method: str = "", params: Any = None,
+                 execution_failure: bool = False):
         super().__init__(f"[{kind}] {method}: {message}")
         self.kind = kind
         self.message = message
         self.method = method
         self.params = params
+        self.execution_failure = bool(execution_failure)
+        self.cached = False
 
     def as_limitation(self, limitation_id: str = "L?") -> dict:
         return {
@@ -416,42 +501,100 @@ def _params_have_block_tag(params: Any) -> bool:
 
 
 class ResponseCache:
-    """Cache keyed by sha256(host, method, canonical params). Responses for floating block
-    tags (latest/pending/...) are never cached because they are not reproducible."""
+    """Response cache keyed by sha256([chain_id, scheme, host, port, redacted path, method, canonical
+    params]). Why every part: two chains served from one host (path-routed gateways, two local forks on
+    different ports) must never share an entry, so the LIVE eth_chainId is part of the key and is stored
+    per entry and in the file header. A cache is unusable until `bind_chain(chain_id)` (called by
+    RpcClient.set_chain_id): reads and writes before that are refused. A file recorded for another chain
+    raises RpcCoverageError(kind rpc_error, "cache file belongs to chain X") at bind time; a file without
+    the version-2 header is ignored (its entries carried no chain binding). Floating block tags
+    (latest/pending/...) are never cached. EVM execution failures (reverts) at pinned blocks are cached
+    as entries with outcome "reverted" because a revert is a fact about the contract at that block."""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None, chain_id: Optional[int] = None):
         self.path = path
-        self._data: dict[str, Any] = {}
+        self.chain_id: Optional[int] = None
+        self.file_chain_id: Optional[int] = None
+        self.discarded: Optional[str] = None
+        self._data: dict[str, dict] = {}
         if path and os.path.exists(path):
+            obj: Any = None
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    self._data = json.load(f)
-            except Exception:
-                self._data = {}
+                    obj = json.load(f)
+            except Exception as e:
+                self.discarded = f"existing cache file could not be read ({type(e).__name__}); starting empty"
+            if isinstance(obj, dict) and obj.get("cache_version") == CACHE_FORMAT_VERSION and isinstance(obj.get("entries"), dict):
+                fc = obj.get("chain_id")
+                self.file_chain_id = fc if isinstance(fc, int) and not isinstance(fc, bool) else None
+                self._data = {k: v for k, v in obj["entries"].items() if isinstance(v, dict)}
+            elif obj is not None:
+                self.discarded = "existing cache file has no version-2 chain_id header; its entries were ignored"
+        if chain_id is not None:
+            self.bind_chain(chain_id)
+
+    def bind_chain(self, chain_id: int) -> None:
+        """Bind to the live-observed chain id. Raises RpcCoverageError if the file was recorded for another chain."""
+        if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id < 1:
+            raise ValueError(f"chain id must be a positive integer, got {chain_id!r}")
+        if self.file_chain_id is not None and self.file_chain_id != chain_id:
+            raise RpcCoverageError("rpc_error",
+                                   f"cache file belongs to chain {self.file_chain_id}, not chain {chain_id}; "
+                                   f"use one cache file per target packet", "cache", None)
+        self.chain_id = chain_id
+        if self.file_chain_id is None:
+            self.file_chain_id = chain_id
 
     @staticmethod
-    def key(host: str, method: str, params: Any) -> str:
-        canon = json.dumps([host, method, params], sort_keys=True, separators=(",", ":"))
+    def key(chain_id: int, endpoint: Any, method: str, params: Any) -> str:
+        """endpoint = [scheme, host, port, redacted_path]."""
+        canon = json.dumps([chain_id, list(endpoint), method, params], sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canon.encode()).hexdigest()
 
-    def get(self, host: str, method: str, params: Any) -> tuple[bool, Any]:
-        if _params_have_block_tag(params):
-            return False, None
-        k = self.key(host, method, params)
-        if k in self._data:
-            return True, self._data[k]["result"]
-        return False, None
+    def _usable(self, chain_id: Optional[int], params: Any) -> bool:
+        if chain_id is None or self.chain_id is None or chain_id != self.chain_id:
+            return False
+        return not _params_have_block_tag(params)
 
-    def put(self, host: str, method: str, params: Any, result: Any) -> None:
-        if _params_have_block_tag(params):
+    def get(self, chain_id: Optional[int], endpoint: Any, method: str, params: Any) -> tuple[bool, Optional[dict]]:
+        """(hit, entry). entry["outcome"] is "ok" (with "result") or "reverted" (with error_kind/error_message)."""
+        if not self._usable(chain_id, params):
+            return False, None
+        entry = self._data.get(self.key(chain_id, endpoint, method, params))
+        if not isinstance(entry, dict) or entry.get("chain_id") != chain_id:
+            return False, None
+        return True, entry
+
+    def _store(self, chain_id: int, endpoint: Any, method: str, params: Any, entry: dict) -> None:
+        k = self.key(chain_id, endpoint, method, params)
+        base = {"chain_id": chain_id, "scheme": endpoint[0], "host": endpoint[1], "port": endpoint[2],
+                "path": endpoint[3], "method": method, "params": params}
+        base.update(entry)
+        self._data[k] = base
+        self._save()
+
+    def put(self, chain_id: Optional[int], endpoint: Any, method: str, params: Any, result: Any) -> None:
+        if not self._usable(chain_id, params):
             return
-        k = self.key(host, method, params)
-        self._data[k] = {"host": host, "method": method, "params": params, "result": result}
-        if self.path:
-            tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._data, f)
-            os.replace(tmp, self.path)
+        assert chain_id is not None
+        self._store(chain_id, endpoint, method, params, {"outcome": "ok", "result": result})
+
+    def put_failure(self, chain_id: Optional[int], endpoint: Any, method: str, params: Any, err: "RpcCoverageError") -> None:
+        """Cache an EVM execution failure (never an infrastructure failure)."""
+        if not err.execution_failure or not self._usable(chain_id, params):
+            return
+        assert chain_id is not None
+        self._store(chain_id, endpoint, method, params,
+                    {"outcome": "reverted", "error_kind": err.kind, "error_message": err.message})
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        obj = {"cache_version": CACHE_FORMAT_VERSION, "chain_id": self.file_chain_id, "entries": self._data}
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f)
+        os.replace(tmp, self.path)
 
     def __len__(self) -> int:
         return len(self._data)
@@ -462,45 +605,94 @@ class RpcClient:
     RpcPolicyError before any network activity. This client never signs or broadcasts."""
 
     def __init__(self, url: str, timeout: float = 20.0, cache: Optional[ResponseCache] = None,
-                 retries: int = 2, backoff: float = 1.5, user_agent: str = "evm-token-due-diligence/1.0"):
+                 retries: int = 2, backoff: float = 1.5, user_agent: str = "evm-token-due-diligence/1.0",
+                 chain_id: Optional[int] = None):
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise ValueError("RPC url must be http(s)")
+        p = urllib.parse.urlsplit(url)
+        if p.username is not None or p.password is not None:
+            raise ValueError("userinfo (user:password@host) in the RPC URL is not supported by this client; "
+                             "use an endpoint that carries the credential in the path or query string "
+                             "(both are redacted in every output) instead")
+        try:
+            port = p.port  # ValueError for a non-numeric or out-of-range port
+        except ValueError as e:
+            raise ValueError(f"RPC url has an invalid port: {e}")
+        if not p.hostname:
+            raise ValueError("RPC url has no host")
         self.url = url
         self.redacted_url = redact_url(url)
-        self.host = urllib.parse.urlsplit(url).hostname or ""
+        self.scheme = p.scheme.lower()
+        self.host = p.hostname
+        self.port = port if port is not None else (443 if self.scheme == "https" else 80)
+        self.redacted_path = _redact_path(p.path)
+        # cache namespace: same host on another port or path is another endpoint
+        self.endpoint = [self.scheme, self.host, self.port, self.redacted_path]
         self.timeout = timeout
         self.cache = cache
-        self.retries = retries
+        self.retries = max(0, int(retries))
         self.backoff = backoff
         self.user_agent = user_agent
+        self.chain_id: Optional[int] = None
         self.calls: list[dict] = []
         self._id = 0
+        if chain_id is not None:
+            self.set_chain_id(chain_id)
+
+    def set_chain_id(self, chain_id: int) -> None:
+        """Bind the client and its cache to the LIVE-observed chain id (call right after eth_chainId).
+        Nothing is read from or written to the cache before this. Raises RpcCoverageError when the
+        cache file was recorded for another chain (the caller decides: drop the cache or stop)."""
+        if isinstance(chain_id, bool) or not isinstance(chain_id, int) or chain_id < 1:
+            raise ValueError(f"chain id must be a positive integer, got {chain_id!r}")
+        if self.cache is not None:
+            self.cache.bind_chain(chain_id)
+        self.chain_id = chain_id
+
+    def _cache_usable(self) -> bool:
+        return self.cache is not None and self.chain_id is not None
 
     def call(self, method: str, params: Optional[list] = None) -> Any:
         params = params if params is not None else []
         if method not in READ_ONLY_METHODS:
             raise RpcPolicyError(f"method {method} is not in the read-only allowlist; this client never signs or broadcasts")
-        if self.cache is not None:
-            hit, val = self.cache.get(self.host, method, params)
-            if hit:
-                self.calls.append({"method": method, "params": params, "cached": True})
-                return val
+        if self._cache_usable():
+            assert self.cache is not None
+            hit, entry = self.cache.get(self.chain_id, self.endpoint, method, params)
+            if hit and entry is not None:
+                if entry.get("outcome") == "reverted":
+                    self.calls.append({"method": method, "params": params, "cached": True, "outcome": "reverted"})
+                    err = RpcCoverageError(entry.get("error_kind") or "rpc_error",
+                                           entry.get("error_message") or "execution failure (replayed from cache)",
+                                           method, params, execution_failure=True)
+                    err.cached = True
+                    raise err
+                self.calls.append({"method": method, "params": params, "cached": True, "outcome": "ok"})
+                return entry.get("result")
         last_err: Optional[RpcCoverageError] = None
         for attempt in range(self.retries + 1):
             try:
                 result = self._do(method, params)
-                self.calls.append({"method": method, "params": params, "cached": False})
-                if self.cache is not None:
-                    self.cache.put(self.host, method, params, result)
+                self.calls.append({"method": method, "params": params, "cached": False, "outcome": "ok"})
+                if self._cache_usable():
+                    assert self.cache is not None
+                    self.cache.put(self.chain_id, self.endpoint, method, params, result)
                 return result
             except RpcCoverageError as e:
                 last_err = e
-                if e.kind in ("rpc_error", "auth", "malformed_response") and e.kind != "rpc_rate_limit":
+                if e.execution_failure and self._cache_usable():
+                    assert self.cache is not None
+                    self.cache.put_failure(self.chain_id, self.endpoint, method, params, e)
+                if e.kind in NON_RETRIED_KINDS:
                     break
-                if attempt < self.retries:
+                if attempt < self.retries and self.backoff > 0:  # no sleep at all when retries == 0
                     time.sleep(self.backoff * (attempt + 1))
         assert last_err is not None
         raise last_err
+
+    def _scrub(self, text: Any) -> str:
+        """Never let the raw URL (which may carry a key) into an error message."""
+        return str(text).replace(self.url, self.redacted_url)
 
     def _do(self, method: str, params: list) -> Any:
         self._id += 1
@@ -523,12 +715,16 @@ class RpcClient:
             if isinstance(reason, socket.gaierror) or "name or service not known" in str(reason).lower() or "nodename" in str(reason).lower():
                 raise RpcCoverageError("dns_failure", f"DNS resolution failed for {self.redacted_url}", method, params)
             if isinstance(reason, ssl.SSLError):
-                raise RpcCoverageError("rpc_error", f"TLS error contacting {self.redacted_url}: {reason}", method, params)
-            raise RpcCoverageError("rpc_error", f"transport error contacting {self.redacted_url}: {reason}", method, params)
+                raise RpcCoverageError("rpc_error", f"TLS error contacting {self.redacted_url}: {self._scrub(reason)}", method, params)
+            raise RpcCoverageError("rpc_error", f"transport error contacting {self.redacted_url}: {self._scrub(reason)}", method, params)
         except (socket.timeout, TimeoutError):
             raise RpcCoverageError("rpc_timeout", f"timeout after {self.timeout}s contacting {self.redacted_url}", method, params)
+        except http.client.HTTPException as e:  # IncompleteRead, BadStatusLine, LineTooLong, InvalidURL, ...
+            raise RpcCoverageError("rpc_error", f"malformed HTTP response from {self.redacted_url}: {type(e).__name__}: {self._scrub(e)}", method, params)
         except OSError as e:
-            raise RpcCoverageError("rpc_error", f"OS error contacting {self.redacted_url}: {e}", method, params)
+            raise RpcCoverageError("rpc_error", f"OS error contacting {self.redacted_url}: {self._scrub(e)}", method, params)
+        except Exception as e:  # anything else the transport can throw is still a coverage problem, never a crash
+            raise RpcCoverageError("rpc_error", f"unexpected transport failure contacting {self.redacted_url}: {type(e).__name__}: {self._scrub(e)}", method, params)
         try:
             obj = json.loads(raw.decode("utf-8"))
         except Exception:
@@ -539,12 +735,13 @@ class RpcClient:
             err = obj["error"]
             msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             code = err.get("code") if isinstance(err, dict) else None
-            low = msg.lower()
+            low = str(msg).lower()
             if "rate" in low and "limit" in low or code in (-32005, 429):
                 raise RpcCoverageError("rpc_rate_limit", f"rpc error {code}: {msg}", method, params)
             if "missing trie node" in low or "pruned" in low or "state not available" in low or "historical state" in low:
                 raise RpcCoverageError("rpc_pruned", f"rpc error {code}: {msg}", method, params)
-            raise RpcCoverageError("rpc_error", f"rpc error {code}: {msg}", method, params)
+            executed = method in _EXECUTING_METHODS and (code == 3 or any(m in low for m in EXECUTION_FAILURE_MARKERS))
+            raise RpcCoverageError("rpc_error", f"rpc error {code}: {msg}", method, params, execution_failure=executed)
         if "result" not in obj:
             raise RpcCoverageError("malformed_response", "response lacked result", method, params)
         return obj["result"]

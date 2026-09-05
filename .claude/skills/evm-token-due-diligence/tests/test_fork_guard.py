@@ -67,7 +67,9 @@ def plain_node_handlers():
 
 class GuardTestBase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fork_guard_test_")
+        tmpdir = tempfile.TemporaryDirectory(prefix="fork_guard_test_")
+        self.addCleanup(tmpdir.cleanup)  # nothing is left behind in the temp directory
+        self.tmp = tmpdir.name
         self.servers = []
 
     def tearDown(self):
@@ -84,7 +86,7 @@ class GuardTestBase(unittest.TestCase):
         out = os.path.join(self.tmp, out_name)
         so, se = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
-            code = fork_guard.main([*argv, "--out", out])
+            code = fork_guard.main([*argv, "--out", out, "--retries", "0"])
         att = None
         if os.path.exists(out):
             with open(out, "r", encoding="utf-8") as f:
@@ -152,17 +154,25 @@ class ForkGuardTests(GuardTestBase):
         with mock.patch.object(ddcore.RpcClient, "_do", side_effect=AssertionError("network attempted")):
             code, att, out, err = self.run_guard("--rpc", "http://203.0.113.5:8545", "--expect-chain-id", "1", out_name="b.json")
         self.assertEqual(code, 1)
-        self.assertIn("not loopback or RFC1918", next(c for c in att["checks"] if c["name"] == "local_endpoint")["detail"])
+        self.assertIn("not loopback", next(c for c in att["checks"] if c["name"] == "local_endpoint")["detail"])
 
     def test_c2_host_classification(self):
-        ok_hosts = ["http://127.0.0.1:8545", "http://localhost:8545", "http://[::1]:8545", "http://10.1.2.3:8545",
-                    "http://172.16.0.9:8545", "http://172.31.255.1", "http://192.168.1.10:8545", "http://dev.localhost:8545"]
+        ok_hosts = ["http://127.0.0.1:8545", "http://localhost:8545", "http://localhost.:8545", "http://LOCALHOST:8545",
+                    "http://[::1]:8545", "http://[::ffff:127.0.0.1]:8545", "http://10.1.2.3:8545", "http://172.16.0.9:8545",
+                    "http://172.31.255.1", "http://192.168.1.10:8545", "http://dev.localhost:8545", "http://[fd00::1]:8545"]
         bad_hosts = ["http://172.32.0.1:8545", "http://8.8.8.8", "https://rpc.example.invalid", "ws://127.0.0.1:8545",
-                     "http://100.64.0.1", "http://169.254.1.1"]
+                     "http://100.64.0.1", "http://169.254.1.1", "http://0.0.0.0:8545", "http://[::]:8545", "http://[fe80::1]:8545",
+                     "http://[::ffff:8.8.8.8]:8545", "http://127.1:8545", "http://127.0.0.1.example.com:8545"]
         for u in ok_hosts:
             self.assertTrue(fork_guard.classify_host(u)[0], u)
         for u in bad_hosts:
             self.assertFalse(fork_guard.classify_host(u)[0], u)
+        ok, why = fork_guard.classify_host("http://0.0.0.0:8545")
+        self.assertFalse(ok)
+        self.assertIn("use 127.0.0.1 instead", why)
+        self.assertIn("loopback name", fork_guard.classify_host("http://localhost.:8545")[1])
+        # a malformed port never raises out of classification (main() rejects it as usage)
+        self.assertTrue(fork_guard.classify_host("http://127.0.0.1:abc")[0])
 
     def test_d_node_without_fork_identification_fails(self):
         url, server = self.serve(plain_node_handlers())
@@ -176,6 +186,34 @@ class ForkGuardTests(GuardTestBase):
         chain = next(c for c in att["checks"] if c["name"] == "chain_id_matches")
         self.assertTrue(chain["ok"])  # chain matched, but that alone is not enough
         self.assertIsNone(att["fork_block"])
+
+    def test_d3_empty_or_unrecognised_introspection_fails_closed(self):
+        # a gateway that answers unknown methods with {} must not pass as an anvil/hardhat fork
+        for method in ("anvil_nodeInfo", "hardhat_metadata"):
+            handlers = plain_node_handlers()
+            handlers[method] = {}
+            url, server = self.serve(handlers)
+            code, att, out, err = self.run_guard("--rpc", url, "--expect-chain-id", "31", out_name=f"{method}.json")
+            self.assertEqual(code, 1, method)
+            self.assertFalse(att["fork_verified_disposable"])
+            self.assertEqual(att["fork_type"], "unknown_local")
+            ident = next(c for c in att["checks"] if c["name"] == "fork_self_identification")
+            self.assertFalse(ident["ok"])
+            self.assertIn(f"{method}=unrecognised object", ident["detail"])
+        # an unexpected shape (no known key) is treated the same way
+        handlers = plain_node_handlers()
+        handlers["anvil_nodeInfo"] = {"unexpected": 1}
+        url, server = self.serve(handlers)
+        code, att, out, err = self.run_guard("--rpc", url, "--expect-chain-id", "31", out_name="shape.json")
+        self.assertEqual(code, 1)
+        self.assertFalse(att["fork_verified_disposable"])
+        # a recognised anvil object identifies the node even when web3_clientVersion is unhelpful
+        handlers = anvil_handlers()
+        handlers["web3_clientVersion"] = "custom-build/1.0"
+        url, server = self.serve(handlers)
+        code, att, out, err = self.run_guard("--rpc", url, "--expect-chain-id", "31", out_name="obj.json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(att["fork_type"], "anvil")
 
     def test_d2_block_below_expected_fails(self):
         url, server = self.serve(anvil_handlers(block_hex="0x10"))
@@ -202,6 +240,12 @@ class ForkGuardTests(GuardTestBase):
         self.assertEqual(code, 2)
         code, att, out, err = self.run_guard("--rpc", "http://127.0.0.1:1", "--expect-chain-id", "0")
         self.assertEqual(code, 2)
+        # an unparseable --rpc (non-numeric port) is a usage error, never a traceback
+        with mock.patch.object(ddcore.RpcClient, "_do", side_effect=AssertionError("network attempted")):
+            code, att, out, err = self.run_guard("--rpc", "http://127.0.0.1:abc", "--expect-chain-id", "1", out_name="badport.json")
+        self.assertEqual(code, 2)
+        self.assertIsNone(att)
+        self.assertIn("malformed", err)
 
     def test_json_output(self):
         url, server = self.serve(anvil_handlers())

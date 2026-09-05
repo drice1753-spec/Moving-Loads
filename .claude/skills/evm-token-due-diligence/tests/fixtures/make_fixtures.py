@@ -8,11 +8,17 @@ scripts/validate_report.py, then derives every reject-* fixture by a minimal mut
 Everything here is synthetic: addresses are keccak-derived from labels, block hashes are
 keccak256(label), chain ids are placeholders for the fixture only. Nothing describes a real token.
 
-Run:  python3 tests/fixtures/make_fixtures.py [--out DIR] [--no-templates]
+Run:  python3 tests/fixtures/make_fixtures.py [--out DIR] [--no-templates] [--templates-dir DIR]
 Writes <fixtures>/<case>/{manifest.json,report.md,expected.json} and, unless --no-templates,
-<skill-root>/templates/manifest.example.json + report.example.md (identical to the valid fixture;
-validate the template copy with --report templates/report.example.md because manifest.report.path
-is 'report.md', relative to the manifest).
+<skill-root>/templates/manifest.example.json + report.example.md. The template pair is the valid
+fixture with report.path "report.example.md" and frontmatter manifest_path "manifest.example.json"
+(report.sha256 recomputed), so `validate_report.py --manifest templates/manifest.example.json`
+passes with no --report override.
+
+Validator contract v1.1: the valid pair links every finding from a check of the same surface with
+matching severity, pins every onchain evidence row, scopes every evidence/finding address, and renders
+the Ratings table and verdict answer from the manifest. Reject cases re-render the report from the
+mutated manifest where the mutation would otherwise add an unrelated report error.
 """
 from __future__ import annotations
 
@@ -30,13 +36,14 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import ddcore  # noqa: E402
 
-ALL_E_CODES = [
+ALL_E_CODES = [  # validator contract v1.1 (keep in sync with scripts/validate_report.py and tests/test_validator.py)
     "E-SCHEMA", "E-ADDR-MALFORMED", "E-ADDR-CHECKSUM", "E-CHAIN-MISMATCH", "E-CHAIN-UNPINNED", "E-PIN-PLACEHOLDER",
     "E-PIN-HEADER-MISMATCH", "E-PIN-TIME", "E-PIN-PRIMARY", "E-META-STATUS", "E-META-REPORT", "E-SCOPE-TARGET",
-    "E-SCOPE-RUNTIME", "E-REPORT-MISSING", "E-REPORT-HASH", "E-REPORT-IDENTITY", "E-REPORT-TARGET-ABSENT",
-    "E-REPORT-SECTIONS", "E-CHECK-CORE-MISSING", "E-CHECK-STATUS", "E-EVIDENCE-DANGLING", "E-FINDING-NO-EVIDENCE",
-    "E-FINDING-CHAIN", "E-RATING-MISSING", "E-RATING-UNKNOWN-AS-LOW", "E-RATING-CRITICAL-AVERAGED", "E-DECL-SIGNING",
-    "E-DECL-FORK", "E-MODE-MISMATCH",
+    "E-SCOPE-RUNTIME", "E-SCOPE-ADDRESS", "E-REPORT-MISSING", "E-REPORT-HASH", "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT", "E-REPORT-SECTIONS", "E-REPORT-RATINGS", "E-REPORT-VERDICT", "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS", "E-CHECK-DISCOVERY-ONLY", "E-EVIDENCE-DANGLING", "E-FINDING-NO-EVIDENCE", "E-FINDING-UNLINKED",
+    "E-FINDING-CHAIN", "E-FINDING-EVIDENCE-TYPE", "E-RATING-MISSING", "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED", "E-DECL-SIGNING", "E-DECL-FORK", "E-MODE-MISMATCH",
 ]
 
 TARGET_CHAIN = 8453      # fixture value only; a real run verifies chain id from eth_chainId at use time
@@ -325,8 +332,9 @@ def report_symbol(m: dict) -> str:
     return f"nonstandard:{sym['value']}"
 
 
-def render_report(m: dict) -> str:
-    """Render the report from the manifest. Body mentions ONLY scoped addresses."""
+def render_report(m: dict, manifest_name: str = "manifest.json") -> str:
+    """Render the report from the manifest. Body mentions ONLY scoped addresses; the Ratings table and the
+    verdict answer are rendered verbatim from the manifest (E-REPORT-RATINGS / E-REPORT-VERDICT)."""
     ppin = next(p for p in m["pins"] if p["pin_id"] == m["primary_pin_id"])
     t = m["target"]
     ev = {e["evidence_id"]: e for e in m["evidence"]}
@@ -341,7 +349,7 @@ def render_report(m: dict) -> str:
         f"primary_pin_id: {ppin['pin_id']}",
         f"primary_pin_block: {ppin['block_number']}",
         f"primary_pin_block_hash: {ppin['block_hash']}",
-        f"manifest_path: {'manifest.json'}",
+        f"manifest_path: {manifest_name}",
         "---",
         "",
         f"# Due-diligence report: {report_symbol(m)} on chain {t['requested']['chain_id']}",
@@ -451,8 +459,8 @@ def case_same_symbol_other_chain(m, r):
     m["target"]["observed"]["chain_id"] = OTHER_CHAIN
     m["target"]["observed"]["rpc_chain_id_hex"] = hex(OTHER_CHAIN)
     m["scope_addresses"][0]["chain_id"] = OTHER_CHAIN
-    return m, r, expected("fail", ["E-CHAIN-MISMATCH", "E-SCOPE-TARGET"], ["E-CHAIN-UNPINNED"],
-                          "Same-symbol token substituted from chain 1: requested 8453 but RPC observed 0x1 and the scoped token entry is on chain 1. E-CHAIN-UNPINNED is an unavoidable side effect (chain 1 has no pin).")
+    return m, r, expected("fail", ["E-CHAIN-MISMATCH", "E-SCOPE-TARGET", "E-SCOPE-ADDRESS"], ["E-CHAIN-UNPINNED"],
+                          "Same-symbol token substituted from chain 1: requested 8453 but RPC observed 0x1 and the scoped token entry is on chain 1, so every evidence row and finding that cites the token address on chain 8453 is unscoped (E-SCOPE-ADDRESS). E-CHAIN-UNPINNED is an unavoidable side effect (chain 1 has no pin).")
 
 
 def case_wrong_target_report(m, r):
@@ -480,8 +488,9 @@ def case_unknown_as_pass(m, r):
             c["status"] = "unknown"; c["reason"] = "quote call not run"
     rt = m["ratings"]["sellability_exit_depth"]
     rt["rating"] = "low"; rt["likelihood"] = "low"; rt["coverage_qualified"] = False; rt["coverage_note"] = None
+    r = render_report(m)  # the report renders the mutated ratings, so only the check/rating contradiction triggers
     return m, r, expected("fail", ["E-CHECK-STATUS", "E-RATING-UNKNOWN-AS-LOW"], [],
-                          "C-HIST-SELL presented as pass with no evidence and reason 'not run'; sellability rated low over an unknown C-QUOTE without coverage qualification. L1 still lists C-HIST-SELL in affected_check_ids, so no limitation warning is expected.")
+                          "C-HIST-SELL presented as pass with no evidence and reason 'not run' while L1 still lists it in affected_check_ids (both E-CHECK-STATUS); sellability rated low over an unknown C-QUOTE without coverage qualification (E-RATING-UNKNOWN-AS-LOW; the same code rejects a not_applicable rating over a basis that is not not_applicable, low with coverage none, and a coverage_note under 20 characters).")
 
 
 def case_malformed_address(m, r):
@@ -525,7 +534,7 @@ def case_simulation_without_fork_guard(m, r):
         if c["check_id"] == "C-QUOTE":
             c["evidence_ids"].append("E16")
     return m, r, expected("fail", ["E-DECL-FORK"], [],
-                          "simulation.used is true and simulation_counterfactual evidence exists, but fork_verified_disposable is false (fork_guard.py attestation absent).")
+                          "simulation.used is true and simulation_counterfactual evidence exists, but fork_verified_disposable is false (fork_guard.py attestation absent). W-DECL-FORK-ATTESTATION is expected as a warning because fork_attestation_path is null.")
 
 
 CASES = [
@@ -552,6 +561,15 @@ def build_all() -> dict[str, tuple[dict, str, dict]]:
     return out
 
 
+def build_templates() -> tuple[dict, str]:
+    """The valid pair renamed for <skill-root>/templates: report.path 'report.example.md' and frontmatter
+    manifest_path 'manifest.example.json', so the pair validates in place with no --report override."""
+    m = build_manifest()
+    m["report"]["path"] = "report.example.md"
+    r = render_report(m, manifest_name="manifest.example.json")
+    return finalize(m, r)
+
+
 def write_json(path: Path, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
@@ -559,7 +577,9 @@ def write_json(path: Path, obj) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=str(HERE), help="fixtures directory (default: this file's directory)")
-    ap.add_argument("--no-templates", action="store_true", help="do not refresh templates/manifest.example.json + report.example.md")
+    ap.add_argument("--no-templates", action="store_true", help="do not refresh manifest.example.json + report.example.md")
+    ap.add_argument("--templates-dir", default=str(SKILL_ROOT / "templates"),
+                    help="where to write manifest.example.json + report.example.md (default: <skill-root>/templates)")
     args = ap.parse_args(argv)
     out_dir = Path(args.out)
     cases = build_all()
@@ -567,16 +587,16 @@ def main(argv=None) -> int:
         d = out_dir / name
         d.mkdir(parents=True, exist_ok=True)
         write_json(d / "manifest.json", m)
-        (d / "report.md").write_text(r, encoding="utf-8")
+        (d / "report.md").write_bytes(r.encode("utf-8"))  # bytes: report.sha256 is the hash of the file bytes
         write_json(d / "expected.json", exp)
         print(f"wrote {d}")
     if not args.no_templates:
-        tdir = SKILL_ROOT / "templates"
+        tdir = Path(args.templates_dir)
         tdir.mkdir(parents=True, exist_ok=True)
-        m, r, _ = cases["valid"]
+        m, r = build_templates()
         write_json(tdir / "manifest.example.json", m)
-        (tdir / "report.example.md").write_text(r, encoding="utf-8")
-        print(f"wrote {tdir / 'manifest.example.json'} and report.example.md (validate with --report templates/report.example.md)")
+        (tdir / "report.example.md").write_bytes(r.encode("utf-8"))
+        print(f"wrote {tdir / 'manifest.example.json'} and report.example.md (validate with --manifest alone)")
     return 0
 
 

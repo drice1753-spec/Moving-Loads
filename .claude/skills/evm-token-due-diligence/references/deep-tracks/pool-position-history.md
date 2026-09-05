@@ -22,8 +22,8 @@ track uses them and does not restate them.
 | Item | Source | Why |
 |---|---|---|
 | Pool identity: v2 pair address, v3 pool address, or v4 `PoolId` with full `PoolKey` (currency0, currency1, fee, tickSpacing, hooks) | `scripts/pool_math.py v2-pair …` / `v3-pool …` / `v4-pool-id …` then confirm against the factory `PairCreated`/`PoolCreated` or PoolManager `Initialize` log | the derived address is a hypothesis until a creation log on the target chain confirms it; init code hashes are verify-at-use |
-| Pin `P1` and, for historical snapshots, `P2…` (`purpose: historical`) | `scripts/rpc_probe.py` | custody statements are bound to a block |
-| Position manager / PoolManager / locker addresses with `code_hash` and provenance | target packet scope; `rpc_probe.py --address <pm>` | the singleton and managers differ per chain and version; resolve, do not recall |
+| Pin `P1` and, for historical snapshots, `P2…` (`purpose: historical`) | the frozen packet; `scripts/rpc_probe.py --rpc URL --address <token> --chain-id N --block <historical block> --out packet-P2.json` for each historical pin | custody statements are bound to a block |
+| Position manager / PoolManager / locker addresses with `code_hash` and provenance | target packet scope; `scripts/rpc_probe.py --rpc URL --address <pm> --chain-id N --block <P1 block>` (always `--block <P1 block>`: a packet whose `pin.block_hash` differs from the frozen packet's may not be cited as P1) | the singleton and managers differ per chain and version; resolve, do not recall |
 | Event signatures for the exact deployed versions | recompute with `ddcore.keccak256_hex`; confirm each against one observed log | forks and lockers change signatures |
 | Receipts (`status: 0x1`) for every custody or principal-moving transaction | `eth_getTransactionReceipt` | a log from a reverted call does not exist; a call without receipt proves nothing |
 
@@ -91,8 +91,9 @@ contract emits them by decoding one real log before filtering on them):
    confirm the recipient from the token `Transfer`s (or native value trace) in the receipt.
 
 6. Reconstruct fee collections at receipt level: for every `Collect` (v3), every `ModifyLiquidity` with zero
-   delta plus settlement (v4), or every `Burn`/`Skim`-style extraction (v2), record recipient, asset, amount
-   and the token `Transfer` log or native trace that delivered it. Sum per recipient and hand the table to
+   delta plus settlement (v4), or every `Burn`/`Skim`-style extraction (v2), first confirm the position
+   belongs to THIS pool (`positions(tokenId)` token0/token1/fee, or the `PoolId` topic), then record
+   recipient, asset, amount and the token `Transfer` log or native trace that delivered it. Sum per recipient and hand the table to
    `references/deep-tracks/proceeds-reconciliation.md`; never hand over a sum without its receipt list.
 
 7. Re-read current state at `P1` for every position still live: `positions(tokenId)` liquidity and tick range,

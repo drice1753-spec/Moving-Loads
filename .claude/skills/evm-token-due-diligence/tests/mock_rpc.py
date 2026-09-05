@@ -17,18 +17,22 @@ assert that no non-allowlisted method was ever sent (see ``non_allowlisted_metho
 and ``assert_only_allowlisted``). Unknown methods are recorded too and answered with
 JSON-RPC error -32601, which is what a real node does.
 
+``RawResponseServer(payload)`` answers every TCP connection with fixed raw bytes (a truncated body,
+a garbage status line) so tests can prove malformed HTTP becomes a coverage limitation, never a crash.
+
 Also exports tiny ABI helpers for building return data in tests:
 ``abi_word``, ``abi_address``, ``abi_bool``, ``abi_string``, ``abi_bytes32_text``.
 """
 from __future__ import annotations
 
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
 __all__ = [
-    "start_mock", "MockRpcServer", "JsonRpcError", "HttpStatus",
+    "start_mock", "MockRpcServer", "JsonRpcError", "HttpStatus", "RawResponseServer",
     "non_allowlisted_methods", "assert_only_allowlisted",
     "abi_word", "abi_address", "abi_bool", "abi_string", "abi_bytes32_text",
 ]
@@ -170,6 +174,76 @@ def start_mock(handlers: dict[str, Any], port: int = 0, path: str = "/") -> tupl
     server.thread = t
     host, bound_port = server.server_address[0], server.server_address[1]
     return f"http://{host}:{bound_port}{path}", server
+
+
+class RawResponseServer:
+    """Loopback TCP server that answers every connection with ``payload`` verbatim, then closes.
+    Use ``with RawResponseServer(b"...") as srv: srv.url`` (or call ``stop()``). The listening socket
+    polls with a short timeout so ``stop()`` always returns and no socket is left open."""
+
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self._stop = threading.Event()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(5)
+        self.sock.settimeout(0.05)
+        host, port = self.sock.getsockname()[:2]
+        self.url = f"http://{host}:{port}/"
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            try:
+                conn.settimeout(2.0)
+                self._read_request(conn)  # consume the whole request first, so closing never resets the connection
+                conn.sendall(self.payload)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+    @staticmethod
+    def _read_request(conn: socket.socket) -> None:
+        """Read HTTP headers and the Content-Length body (best effort; a timeout just ends the read)."""
+        buf = b""
+        try:
+            while b"\r\n\r\n" not in buf:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1].strip() or b"0")
+            while len(body) < length:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                body += chunk
+        except (OSError, ValueError):
+            return
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.thread.join(timeout=5)
+        self.sock.close()
+
+    def __enter__(self) -> "RawResponseServer":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.stop()
 
 
 # ------------------------------------------------------------------------------------

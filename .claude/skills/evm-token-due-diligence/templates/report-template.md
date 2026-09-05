@@ -11,48 +11,63 @@ manifest_path: manifest.json
 ---
 
 <!-- Frontmatter is parsed as simple `key: value` lines and must match the manifest exactly
-     (E-REPORT-IDENTITY, E-META-REPORT, E-MODE-MISMATCH). manifest_path is relative to this file.
+     (E-REPORT-IDENTITY, E-META-REPORT, E-MODE-MISMATCH); a UTF-8 BOM and leading blank lines are
+     tolerated, a duplicated key is rejected. manifest_path is relative to this file, and the manifest's
+     report.path must point back here from inside the manifest's directory (E-REPORT-MISSING).
      mode is focused | broad | formal. Replace every <placeholder>. Keep the H2 headings verbatim and
-     in this order. Every address mentioned in the body must be a manifest scope address. -->
+     in this order (E-REPORT-SECTIONS). HTML comments like this one and fenced code blocks are
+     stripped before the validator scans the body, so the target address, the Ratings rows and the
+     verdict answer must sit in visible text. Every address mentioned in the body must be a manifest
+     scope address (W-REPORT-UNSCOPED-ADDRESS, an error under --strict). -->
 
 # Token due diligence report
 
 ## Verdict
 
 <!-- One direct, conditional sentence answering verdict.question under verdict.requirement_frame, in
-     bounded language and naming the pin. Then conditions (if GO-WITH-CONDITIONS) and main reasons, each
-     citing finding ids. Never "safe", "legit", "rug-proof", "risk-free" (W-VERDICT-LANGUAGE). -->
+     bounded language and naming the pin. The Answer line must contain manifest.verdict.answer verbatim
+     (whitespace-normalized; E-REPORT-VERDICT). Then conditions (if GO-WITH-CONDITIONS) and main reasons,
+     each citing finding ids. Never "safe", "legit", "rug-proof", "risk-free" (W-VERDICT-LANGUAGE, a
+     regex heuristic; error under --strict). If the user gave no horizon or size, the requirement frame
+     is the default "rug resistance and exit at the stated size over a 30-day hold", labeled an
+     assumption here. -->
 
 **Question:** <verdict.question>
-**Requirement frame:** <verdict.requirement_frame>
-**Answer:** <e.g. NO-GO under the stated requirement for rug resistance. | GO-WITH-CONDITIONS under <frame>: <conditions>.>
+**Requirement frame:** <verdict.requirement_frame> <(assumed default | as stated by the user)>
+**Answer:** <verdict.answer, e.g. NO-GO under the stated requirement for rug resistance. | GO-WITH-CONDITIONS under <frame>: <conditions>.>
 
 Main reasons:
 - <reason> (F<n>)
 
 ## Target identity
 
-<!-- The checksummed target address MUST appear in this section (E-REPORT-TARGET-ABSENT). -->
+<!-- The checksummed target address MUST appear in this section as visible text (E-REPORT-TARGET-ABSENT). -->
 
 | Item | Value |
 |---|---|
-| Requested chain id | <target.requested.chain_id> |
+| Requested chain id | <target.requested.chain_id> (<requested.source, incl. any chain-name mapping>) |
 | Observed chain id (eth_chainId) | <target.observed.chain_id> |
 | Target address (EIP-55) | <target.address_checksum> |
 | Name / symbol / decimals / total supply | <value (status)> / <value (status)> / <value (status)> / <value (status)> |
 | Accounting model | <standard_erc20 | rebasing | fee_on_transfer | shares_based | wrapper | unknown> |
-| Runtime code hash / size | <code_hash> / <code_size> bytes |
+| Runtime code hash / size / status | <code_hash> / <code_size> bytes / <contract | eoa | unknown> |
 | Proxy status / implementation / admin / upgrade authority | <status> / <address or none> / <address or none> / <resolved authority or unresolved> |
-| Primary pin | P1 = block <n>, hash <0x..>, <YYYY-MM-DDTHH:MM:SSZ> |
+| Primary pin | P1 = block <n>, hash <0x..>, <YYYY-MM-DDTHH:MM:SSZ> (<finalized | latest, reason>) |
 | Deployment | <resolved: tx 0x.. block n deployer 0x.. | unresolved: reason> |
-| Target packet sha256 | <hex> |
+| Target packet `_freeze.sha256` | <hex> |
 
 ## Ratings
 
-<!-- All 11 rows in this order in broad/formal (E-RATING-MISSING). rating: critical|high|medium|low|unknown|not_applicable.
-     likelihood: high|medium|low|unknown. confidence: high|medium|low. coverage: full|partial|none.
-     A critical basis finding forces critical (E-RATING-CRITICAL-AVERAGED). low over unknown/skipped basis needs
-     coverage_qualified + coverage_note (E-RATING-UNKNOWN-AS-LOW). -->
+<!-- All 11 rows in this order in broad/formal (E-RATING-MISSING). The first two cells of each row,
+     `| <surface key> | <rating> |`, must equal manifest.ratings[key].rating (E-REPORT-RATINGS); write them
+     as plain text (no backticks, bold or links) - cells are compared after collapsing whitespace.
+     rating: critical|high|medium|low|unknown|not_applicable. likelihood: high|medium|low|unknown.
+     confidence: high|medium|low. coverage: full|partial|none (rubrics: references/output-standard.md).
+     A critical basis finding forces critical and a high/medium finding sets the floor
+     (E-RATING-CRITICAL-AVERAGED). low over unknown/skipped basis needs coverage_qualified +
+     coverage_note >= 20 chars (E-RATING-UNKNOWN-AS-LOW). Basis checks list every finding-status check on
+     the surface (W-RATING-BASIS-INCOMPLETE); the ids below are defaults - keep only the checks you ran
+     (the 22 core ids are mandatory in broad/formal; G-LAYER-ADMIN when a reward/vault layer exists). -->
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Time basis | Basis checks | Summary |
 |---|---|---|---|---|---|---|---|
@@ -62,7 +77,7 @@ Main reasons:
 | sellability_exit_depth | | | | | P1 | C-HIST-SELL, C-QUOTE | |
 | current_concentration | | | | | P1 | D-SUPPLY, D-CONC | |
 | historical_launch_integrity | | | | | P1 | E-LAUNCH | |
-| admin_treasury_reward_custody | | | | | P1 | F-FEES, F-TREASURY | |
+| admin_treasury_reward_custody | | | | | P1 | F-FEES, F-TREASURY, G-LAYER-ADMIN | |
 | reward_accounting_liveness | | | | | P1 | G-REWARDS | |
 | utility_redemption_rights | | | | | P1 | G-RIGHTS, H-UTILITY | |
 | external_dependencies | | | | | P1 | H-DEPS | |
@@ -71,7 +86,8 @@ Main reasons:
 ## Key findings
 
 <!-- Ordered by severity. One entry per finding: id, exact proposition, severity, confidence
-     (proven|strongly_supported|inference|unknown), evidence ids, pin or tx, historical flag. -->
+     (proven|strongly_supported|inference|unknown), evidence ids, pin or tx, historical flag. Every
+     finding is linked from a check of the same surface (E-FINDING-UNLINKED, E-CHECK-STATUS). -->
 
 - **F<n>** (<severity>, <confidence>) - <proposition>. Evidence: E<n>, E<n>. Basis: <P1 | tx 0x..>.
 
@@ -105,7 +121,8 @@ Main reasons:
 
 <!-- Every coverage.limitations[] entry: id, kind, description, affected checks, affected addresses,
      retries. Every discovery[] record: id, claim, search universe, block range, pagination, inclusion
-     rule, exclusions, materiality threshold, coverage. What was not searched. -->
+     rule, exclusions, materiality threshold, coverage. What was not searched. Every validator warning
+     that remains, with its explanation. -->
 
 | Limitation | Kind | Description | Affected checks | Affected addresses | Retries |
 |---|---|---|---|---|---|
@@ -117,10 +134,14 @@ Main reasons:
 
 ## Declarations
 
+<!-- The validation line records a run that must have happened on the FINAL bytes of this file: after
+     writing it, re-hash (manifest.report.sha256 = ddcore.sha256_file(report)) and re-run the validator;
+     repeat until the last run is on the final file. -->
+
 - No real signing: true. No broadcast: true. No private keys requested: true.
 - External content (websites, repositories, token metadata, labels) treated as untrusted evidence: true.
-- Simulation used: <false | true - fork_type <x>, verified disposable by fork_guard.py, attestation <path>, fork chain id <n>, fork block <n>, synthetic accounts only, results labeled counterfactual>.
-- Validation: `validate_report.py` passed on <date>. Passing validates internal consistency of the manifest and report only; it does not establish RPC honesty, discovery completeness, or protocol safety.
+- Simulation used: <false | true - fork_type <x>, verified disposable by fork_guard.py, attestation <path relative to the manifest>, fork chain id <n> (= target chain), fork block <n>, synthetic accounts only, results labeled counterfactual>.
+- Validation: `validate_report.py` (contract v1.1) passed with `--strict` on <date>; report sha256 re-computed after this line was written. Passing validates internal consistency of the manifest and report only; it does not establish RPC honesty, discovery completeness, or protocol safety.
 
 ## Evidence ledger
 

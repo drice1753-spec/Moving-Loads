@@ -18,20 +18,26 @@
     "E-META-REPORT",
     "E-SCOPE-TARGET",
     "E-SCOPE-RUNTIME",
+    "E-SCOPE-ADDRESS",
     "E-REPORT-MISSING",
     "E-REPORT-HASH",
     "E-REPORT-IDENTITY",
     "E-REPORT-TARGET-ABSENT",
     "E-REPORT-SECTIONS",
+    "E-REPORT-RATINGS",
+    "E-REPORT-VERDICT",
     "E-CHECK-CORE-MISSING",
+    "E-CHECK-DISCOVERY-ONLY",
     "E-EVIDENCE-DANGLING",
     "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-UNLINKED",
     "E-FINDING-CHAIN",
+    "E-FINDING-EVIDENCE-TYPE",
     "E-RATING-MISSING",
     "E-RATING-CRITICAL-AVERAGED",
     "E-DECL-SIGNING",
     "E-DECL-FORK",
     "E-MODE-MISMATCH"
   ],
-  "notes": "C-HIST-SELL presented as pass with no evidence and reason 'not run'; sellability rated low over an unknown C-QUOTE without coverage qualification. L1 still lists C-HIST-SELL in affected_check_ids, so no limitation warning is expected."
+  "notes": "C-HIST-SELL presented as pass with no evidence and reason 'not run' while L1 still lists it in affected_check_ids (both E-CHECK-STATUS); sellability rated low over an unknown C-QUOTE without coverage qualification (E-RATING-UNKNOWN-AS-LOW; the same code rejects a not_applicable rating over a basis that is not not_applicable, low with coverage none, and a coverage_note under 20 characters)."
 }

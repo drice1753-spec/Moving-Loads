@@ -36,7 +36,7 @@ Conditions: Would become GO-WITH-CONDITIONS if mint authority is renounced or pl
 | token_controls | high | medium | high | full | P1 | A-MINT, A-UPGRADE, A-SEIZE, A-RESTRICT, A-TAX, A-EXTCALL, A-ADMIN | Uncapped owner mint at P1 (F1) from an EOA owner (F3); no upgrade, seizure, restriction or tax path found in the runtime. |
 | canonical_lp_principal_custody | low | low | high | full | P1 | B-CANON, B-PRINCIPAL | No current executable removal path found at the pinned block for the canonical position (held by the locker, unlock after horizon). |
 | side_pool_removal_risk | low | low | medium | partial | P1 | B-SIDE | No side pool found in the searched factories (S1); other factories were not searched. |
-| sellability_exit_depth | unknown | unknown | low | partial | P1 | C-HIST-SELL, C-QUOTE | Quotes at the tested sizes were obtained under the quoted state; no historical sell could be verified at receipt level (L1). |
+| sellability_exit_depth | low | low | low | partial | P1 | C-HIST-SELL, C-QUOTE | Quotes at the tested sizes were obtained under the quoted state; no historical sell could be verified at receipt level (L1). |
 | current_concentration | medium | medium | high | full | P1 | D-SUPPLY, D-CONC | Supply reconciles; one holder near 18% of supply (F2). |
 | historical_launch_integrity | low | low | medium | partial | P1 | E-LAUNCH | Launch-era transfers decoded at P2 match the declared allocation; sales in the launch window were not traced beyond transfers. |
 | admin_treasury_reward_custody | medium | medium | high | full | P1 | F-FEES, F-TREASURY, A-ADMIN | Fees route to an EOA treasury controlled by the same owner key. |

@@ -299,6 +299,40 @@ class CliTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(json.loads(out)["code_size"], len(sample_dispatcher()))
 
+    def test_json_error_or_null_result_is_not_empty_code(self):
+        with tempfile.TemporaryDirectory() as d:
+            cases = {
+                "error.json": '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}',
+                "null.json": '{"jsonrpc":"2.0","id":1,"result":null}',
+                "missing.json": '{"jsonrpc":"2.0","id":1}',
+                "number.json": '{"jsonrpc":"2.0","id":1,"result":12345}',
+                "empty.txt": "",
+            }
+            for name, content in cases.items():
+                p = os.path.join(d, name)
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(content)
+                rc, out, err = self._run(["--code-file", p, "--json"])
+                self.assertEqual(rc, 2, name)
+                self.assertEqual(out, "", name)
+                self.assertIn("no runtime code in response" if name != "empty.txt" else "no bytecode given", err, name)
+            # only the literal "0x" is empty code
+            p = os.path.join(d, "eoa.json")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"jsonrpc":"2.0","id":1,"result":"0x"}')
+            rc, out, _ = self._run(["--code-file", p, "--json"])
+            self.assertEqual(rc, 0)
+            self.assertTrue(json.loads(out)["is_empty"])
+        rc, _, err = self._run(["--code", ""])
+        self.assertEqual(rc, 2)
+        rc, out, _ = self._run(["--code", "0x", "--json"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["code_hash"], ddcore.EMPTY_CODE_HASH)
+        with self.assertRaises(ValueError):
+            sel.parse_code('{"error": {"code": -32000, "message": "x"}}')
+        with self.assertRaises(ValueError):
+            sel.parse_code('{"result": null}')
+
     def test_usage_errors(self):
         rc, _, err = self._run([])
         self.assertEqual(rc, 2)

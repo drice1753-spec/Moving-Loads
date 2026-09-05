@@ -8,10 +8,16 @@ if any argument looks like a private key, a mnemonic, or a key-carrying flag.
 
 Checks (exit 0 only when every check is ok):
   no_key_material_in_argv           argv contains no private key / mnemonic / --private-key style flags
-  local_endpoint                    URL host is loopback (localhost, 127.0.0.0/8, ::1) or RFC1918
-                                    private (10/8, 172.16/12, 192.168/16); DNS names are NOT resolved
+  local_endpoint                    URL host is loopback (localhost, localhost., *.localhost, 127.0.0.0/8,
+                                    ::1), RFC1918 private (10/8, 172.16/12, 192.168/16) or IPv6 unique-local
+                                    (fc00::/7, the RFC1918 equivalent); 0.0.0.0/:: (unspecified) are rejected
+                                    with "use 127.0.0.1 instead"; DNS names are NOT resolved (they may point
+                                    anywhere); CGNAT (100.64/10) and link-local ranges are rejected
   fork_self_identification          web3_clientVersion mentions anvil/hardhat/ganache/foundry, OR
-                                    anvil_nodeInfo returns an object, OR hardhat_metadata returns an object
+                                    anvil_nodeInfo returns a NON-EMPTY object with a known anvil key, OR
+                                    hardhat_metadata returns a NON-EMPTY object with a known hardhat key.
+                                    An empty {} or an unrecognised object is NOT identification (a gateway
+                                    that answers unknown methods with {} must fail closed)
   chain_id_matches                  eth_chainId == --expect-chain-id
   block_at_or_above_expected_fork_block   eth_blockNumber >= --expect-fork-block (only when given)
   fork_config_reported              informational: fork block + REDACTED fork url from anvil_nodeInfo.forkConfig
@@ -19,9 +25,10 @@ Checks (exit 0 only when every check is ok):
 
 Usage:
   python3 <skill-root>/scripts/fork_guard.py --rpc http://127.0.0.1:8545 --expect-chain-id N
-        [--expect-fork-block B] [--out attestation.json] [--timeout S] [--json]
+        [--expect-fork-block B] [--out attestation.json] [--timeout S] [--retries N] [--json]
 
-Exit codes: 0 all checks ok (fork_verified_disposable = true), 1 a check failed, 2 usage / refused.
+Exit codes: 0 all checks ok (fork_verified_disposable = true), 1 a check failed, 2 usage / refused
+(including an --rpc URL that cannot be parsed or redacted).
 
 Verify at use time: node-introspection field names (anvil_nodeInfo.forkConfig.forkUrl/forkBlockNumber,
 hardhat_metadata.forkedNetwork.chainId/forkBlockNumber) follow the node versions current when this was
@@ -46,7 +53,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from ddcore import RpcClient, RpcCoverageError, RpcPolicyError, hex_to_int, iso_utc, redact_url  # noqa: E402
+from ddcore import UNPARSEABLE_URL, RpcClient, RpcCoverageError, RpcPolicyError, hex_to_int, iso_utc, redact_url  # noqa: E402
 
 ATTESTATION_VERSION = "1.0"
 TOOL = {"name": "fork_guard.py", "version": "1.0", "library": "ddcore"}
@@ -63,8 +70,13 @@ LOCAL_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique-local (RFC 4193): the private-range equivalent of RFC1918
 )
 FORK_MARKERS = ("anvil", "hardhat", "ganache", "foundry")
+# Keys that make a node-introspection object count as identification. Verify at use time against your node
+# version; an object without any of them is recorded as "unrecognised object" and does NOT identify a fork.
+ANVIL_NODE_INFO_KEYS = ("currentBlockNumber", "currentBlockTimestamp", "currentBlockHash", "forkConfig", "environment", "hardFork")
+HARDHAT_METADATA_KEYS = ("clientVersion", "chainId", "instanceId", "latestBlockNumber", "latestBlockHash", "forkedNetwork")
 
 _PK_RE = re.compile(r"^(0x)?[0-9a-fA-F]{64}$")
 _LOWER_WORD_RE = re.compile(r"^[a-z]+$")
@@ -109,6 +121,8 @@ def classify_host(url: str) -> tuple[bool, str]:
     host = p.hostname
     if not host:
         return False, "URL has no host"
+    if len(host) > 1 and host.endswith("."):
+        host = host[:-1]  # a single trailing dot is the fully-qualified form of the same name
     if host == "localhost" or host.endswith(".localhost"):
         return True, f"host {host!r} is the loopback name"
     try:
@@ -117,10 +131,17 @@ def classify_host(url: str) -> tuple[bool, str]:
         return False, f"host {host!r} is a DNS name, not localhost or a literal loopback/RFC1918 address; names are not resolved because they may point anywhere"
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
+    if ip.is_unspecified:
+        return False, f"host {ip} is the unspecified address (a bind address, not an endpoint): use 127.0.0.1 instead"
     for net in LOCAL_NETWORKS:
         if ip in net:
             return True, f"host {ip} is within {net}"
-    return False, f"host {ip} is not loopback or RFC1918 private"
+    return False, f"host {ip} is not loopback, RFC1918 private, or IPv6 unique-local"
+
+
+def _recognised(obj: Any, keys: tuple[str, ...]) -> bool:
+    """A node-introspection result counts only when it is a non-empty object carrying a known key."""
+    return isinstance(obj, dict) and bool(obj) and any(k in obj for k in keys)
 
 
 def _as_int(v: Any) -> Optional[int]:
@@ -140,7 +161,7 @@ def _as_int(v: Any) -> Optional[int]:
 # the guard
 # ------------------------------------------------------------------------------------
 def run_guard(rpc: str, expect_chain_id: int, expect_fork_block: Optional[int] = None,
-              timeout: float = 10.0, argv_checked: bool = True) -> dict:
+              timeout: float = 10.0, argv_checked: bool = True, retries: int = 2) -> dict:
     checks: list[dict] = []
     att: dict[str, Any] = {
         "attestation_version": ATTESTATION_VERSION,
@@ -174,7 +195,7 @@ def run_guard(rpc: str, expect_chain_id: int, expect_fork_block: Optional[int] =
         return att
 
     try:
-        client = RpcClient(rpc, timeout=timeout)
+        client = RpcClient(rpc, timeout=timeout, retries=retries)
     except ValueError as e:
         check("fork_self_identification", False, f"client could not be created: {e}")
         check("chain_id_matches", False, "not attempted")
@@ -192,15 +213,23 @@ def run_guard(rpc: str, expect_chain_id: int, expect_fork_block: Optional[int] =
     att["client_version"] = client_version
 
     anvil_info: Optional[dict] = None
+    anvil_note = "absent"
     try:
         r = client.call("anvil_nodeInfo", [])
-        anvil_info = r if isinstance(r, dict) else None
+        if _recognised(r, ANVIL_NODE_INFO_KEYS):
+            anvil_info, anvil_note = r, "object"
+        elif r is not None:
+            anvil_note = "unrecognised object (not counted as identification)"
     except RpcCoverageError:
         anvil_info = None
     hardhat_meta: Optional[dict] = None
+    hardhat_note = "absent"
     try:
         r = client.call("hardhat_metadata", [])
-        hardhat_meta = r if isinstance(r, dict) else None
+        if _recognised(r, HARDHAT_METADATA_KEYS):
+            hardhat_meta, hardhat_note = r, "object"
+        elif r is not None:
+            hardhat_note = "unrecognised object (not counted as identification)"
     except RpcCoverageError:
         hardhat_meta = None
 
@@ -214,9 +243,7 @@ def run_guard(rpc: str, expect_chain_id: int, expect_fork_block: Optional[int] =
         att["fork_type"] = "ganache"
     else:
         att["fork_type"] = "unknown_local"
-    id_bits = [cv_detail,
-               "anvil_nodeInfo=" + ("object" if anvil_info is not None else "absent"),
-               "hardhat_metadata=" + ("object" if hardhat_meta is not None else "absent")]
+    id_bits = [cv_detail, "anvil_nodeInfo=" + anvil_note, "hardhat_metadata=" + hardhat_note]
     check("fork_self_identification", identified,
           ("; ".join(id_bits)) if identified else
           "node does not self-identify as a disposable fork: " + "; ".join(id_bits))
@@ -325,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-fork-block", type=int, default=None, help="minimum block number the fork must be at")
     ap.add_argument("--out", default=DEFAULT_OUT, help=f"attestation output path (default ./{DEFAULT_OUT})")
     ap.add_argument("--timeout", type=float, default=10.0, help="per-request timeout in seconds")
+    ap.add_argument("--retries", type=int, default=2, help="retries for transient failures (timeouts, rate limits); default 2")
     ap.add_argument("--json", action="store_true", help="print the attestation JSON to stdout (table goes to stderr)")
     return ap
 
@@ -348,8 +376,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.expect_fork_block is not None and args.expect_fork_block < 0:
         print("fork_guard: --expect-fork-block must be >= 0", file=sys.stderr)
         return EXIT_USAGE
+    if args.retries < 0:
+        print("fork_guard: --retries must be >= 0", file=sys.stderr)
+        return EXIT_USAGE
     try:
-        att = run_guard(args.rpc, args.expect_chain_id, args.expect_fork_block, timeout=args.timeout, argv_checked=True)
+        urllib.parse.urlsplit(args.rpc).port  # a non-numeric port cannot be parsed, redacted, or contacted
+    except ValueError as e:
+        print(f"fork_guard: usage error: --rpc URL is malformed: {e}", file=sys.stderr)
+        return EXIT_USAGE
+    if redact_url(args.rpc) == UNPARSEABLE_URL:
+        print("fork_guard: usage error: --rpc URL cannot be parsed or redacted; give http(s)://host[:port]/path", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        att = run_guard(args.rpc, args.expect_chain_id, args.expect_fork_block, timeout=args.timeout,
+                        argv_checked=True, retries=args.retries)
     except RpcPolicyError as e:  # fixed method set; fail closed anyway
         print(f"fork_guard: policy violation: {e}", file=sys.stderr)
         return EXIT_FAIL

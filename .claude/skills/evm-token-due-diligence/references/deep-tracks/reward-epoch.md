@@ -109,7 +109,7 @@ Evidence rows:
   "decoding_basis": "selectors from proven source (T-PROXY-SOURCE-CORRESPONDENCE pass); uint256/bool/address returns",
   "summary": "lastProcessedEpoch <n>, currentEpoch <n+k>, paused false, rewardToken <addr>" }
 
-{ "evidence_id": "E92", "chain_id": <chain_id>, "address": "<reward_distributor>", "pin_id": null, "tx_hash": null,
+{ "evidence_id": "E92", "chain_id": <chain_id>, "address": "<reward_distributor>", "pin_id": "P1", "tx_hash": null,
   "block_number": null, "evidence_type": "log_decoded",
   "artifact": "artifacts/epoch-payments.jsonl", "artifact_sha256": "<sha256>",
   "query": {"method": "eth_getLogs", "address": "<reward_distributor>", "topics": ["<Paid/Claimed topic0 from ABI>"], "windows": "artifacts/epoch-ranges.json"},

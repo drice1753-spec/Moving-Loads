@@ -51,7 +51,9 @@ Optional external tools the diligence may use. They are NOT bundled and NOT requ
 ```
 export EVM_DD_RPC_URL="<endpoint the user supplied>"      # redacted in every output
 python3 <skill-root>/scripts/rpc_probe.py --address 0x<target> --chain-id <requested chain id> \
-    --block latest --cache rpc-cache.json --out target-packet.json
+    --block finalized --cache rpc-cache.json --out target-packet.json
+# --block finalized where the endpoint supports the tag; fall back to latest if it rejects the tag and
+# record which was used. Exit 3 = chain mismatch (stop), 1 = identity/pin failure (stop, report), 0 = go.
 # ... diligence per SKILL.md, producing manifest.json + report.md ...
 python3 <skill-root>/scripts/validate_report.py --manifest manifest.json --report report.md --strict
 python3 <skill-root>/scripts/ledger.py check --manifest manifest.json
@@ -59,13 +61,52 @@ python3 <skill-root>/scripts/ledger.py check --manifest manifest.json
 
 Read `SKILL.md` first; it links the references that apply to each situation.
 
+### Example invocations
+
+Focused diligence (one mechanism, one flow; `mode: focused`):
+
+> "Did the vault at 0x<vault> on chain 8453 receive its WETH from LP fees of the canonical v3 position?"
+
+The agent derives the token from the vault's position (`positions(tokenId)` -> token0/token1), confirms
+chain id + token address with the user, probes the TOKEN as the target with the command above, adds the
+vault, pool, position manager and fee asset as scope addresses, and answers only that question: checks
+`G-FEE-ORIGIN` and `F-TREASURY`, a `reconcile.py` run per asset, ratings only for the surfaces touched,
+and a report with `## Verdict`, `## Coverage and limitations` and `## Evidence ledger`. It does not
+expand into token controls or launch history.
+
+```
+python3 <skill-root>/scripts/reconcile.py --flows flows-weth.json flows-native.json --tolerance 0 --json
+python3 <skill-root>/scripts/validate_report.py --manifest manifest.json --report report.md --strict
+```
+
+Broad diligence (overall judgement; `mode: broad`):
+
+> "Here is 0x<token> on Arbitrum (chain 42161). Is it a rug? Can I sell 2% of supply?"
+
+The agent maps "Arbitrum" to the commonly cited id and lets `eth_chainId` confirm it, probes the token,
+runs the architecture pass, screens all eight surfaces (all 22 core checks present), opens deep tracks
+only on triggers, rates all 11 surfaces, and leads the verdict with the sellability question under the
+default requirement frame "rug resistance and exit at the stated size over a 30-day hold" (labeled an
+assumption because the user gave no horizon).
+
+```
+python3 <skill-root>/scripts/rpc_probe.py --address 0x<token> --chain-id 42161 --block finalized \
+    --call "pendingOwner()" --cache rpc-cache.json --out target-packet.json
+python3 <skill-root>/scripts/selector_scan.py --code-file runtime.hex --json
+python3 <skill-root>/scripts/validate_report.py --manifest manifest.json --report report.md --strict
+python3 <skill-root>/scripts/ledger.py check --manifest manifest.json
+```
+
+Neither example is a live investigation; the addresses are placeholders and the chain ids must be
+confirmed by `eth_chainId` at use time.
+
 ## Running the self-test and the unit tests
 
 ```
 python3 <skill-root>/scripts/selftest.py
 ```
 Runs every `tests/test_*.py` suite and validates every fixture (the `valid` pair must pass; each
-`reject-*` pair must fail with its expected E-code). Exit code 0 means everything passed.
+`reject-*` pair must fail with its expected error code). Exit code 0 means everything passed.
 
 To run the unit tests directly:
 ```
@@ -79,8 +120,12 @@ mock JSON-RPC server (`tests/mock_rpc.py`, `http.server`).
 - Paths are resolved dynamically; nothing depends on a home directory, a project name, or an OS.
 - No credentials are stored anywhere. RPC URLs are redacted with `ddcore.redact_url` before they are
   written into packets, evidence or reports (user-info, key-like path segments and query values are
-  replaced with `<redacted>`).
-- Cache files (`--cache`) contain only pinned read results keyed by host/method/params; delete them freely.
+  replaced with `<redacted>`). URLs carrying user-info are rejected; use a header- or path-keyed endpoint.
+- Cache files (`--cache`) hold only pinned read results, keyed by the live-observed chain id plus the
+  endpoint (scheme, host, port, redacted path), method and params, with the chain id recorded in the file
+  header and per entry. Nothing is cached before the chain id is known, and a file recorded for another
+  chain is refused (`RpcCoverageError`, kind `rpc_error`, "cache file belongs to chain X"). One cache file
+  per target packet; delete them freely.
 - Node is not a dependency. Nothing is installed globally.
 
 ## Security posture
@@ -97,9 +142,9 @@ mock JSON-RPC server (`tests/mock_rpc.py`, `http.server`).
 
 ## Limitations
 
-- `validate_report.py` proves internal consistency of a manifest and report (identity, pins, scope,
-  linkage, declarations). It cannot prove that an RPC endpoint told the truth, that discovery was
-  complete, or that a protocol is safe.
+- `validate_report.py` (contract v1.1) proves internal consistency of a manifest and report (identity,
+  pins, scope, linkage, ratings floors, report-to-manifest agreement, declarations). It cannot prove that
+  an RPC endpoint told the truth, that discovery was complete, or that a protocol is safe.
 - No live chain data, addresses, chain ids, or protocol deployments are bundled or asserted. Chain-specific
   values (chain ids, hosts, factory addresses, init code hashes) must be verified at use time by RPC read
   or receipt, following `references/chains/chain-verification.md`.

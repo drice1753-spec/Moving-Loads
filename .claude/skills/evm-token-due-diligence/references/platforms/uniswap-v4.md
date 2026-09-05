@@ -35,8 +35,10 @@ is `pass` only with all components and the PoolId matched to an `Initialize` log
    `Transfer` logs with the target's pool key in `getPoolAndPositionInfo`.
 5. StateView: `poolManager()` returns the same PoolManager and `getSlot0(bytes32)` `0xc815641c` is present.
    A StateView bound to a different PoolManager reads a different deployment.
-6. Version: read the PoolManager's code hash and compare it with a known deployment's code hash on the
-   same chain (verify-at-use table); forks of v4 exist and may change constants below.
+6. Version: hash the emitter's runtime (`eth_getCode` at P1, keccak256 = `runtime.code_hash`) and compare
+   it with the hash you record at the pin from the address the Uniswap deployments page lists for this
+   chain (verify-at-use row "PoolManager runtime code hash"; research captured no hash). Different bytes
+   = a fork or another version, and every constant below then needs re-verification.
 
 ## PoolKey, currency ordering, native currency and PoolId
 
@@ -283,6 +285,7 @@ all verify-at-use.
 | Item | Research value (Ethereum mainnet) | Verify at use time by |
 |---|---|---|
 | PoolManager | `0x000000000004444c5dc75cB358380D2e3dE08A90` | emitter of an `Initialize` receipt that names the target; `poolManager()` on the PositionManager and StateView; `eth_chainId` first |
+| PoolManager runtime code hash | not captured by research | `eth_getCode` at P1 on the `Initialize` emitter and on the address the deployments page lists for this chain; record both keccak256 hashes as `bytecode` evidence; equal = same build, unequal = fork or other version (constants below re-verified) |
 | PositionManager | `0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e` | `poolManager()` read; `ModifyLiquidity.sender` of an NFT position's mint receipt |
 | StateView | `0x7ffe42c4a5deea5b0fec41c94c136cf115597227` | `poolManager()` read; `getSlot0` agrees with `extsload` at the same block |
 | V4Quoter | `0x52f0e24d1c21c8a0cb1e5a5dd6198556bd9e1203` | `poolManager()` read; a small quote agrees with `getSlot0` spot |

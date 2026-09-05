@@ -14,6 +14,12 @@ Conventions used in all six:
   tagged with the evidence type (BRIEF 2.4 vocabulary) and whether they are current-state at P1 or
   historical (bound to a tx or block before P1).
 - Ledger rows use the 12 columns of `templates/ledger-columns.md`; `artifact_or_query` is abbreviated.
+  Row shape follows validator contract v1.1: `pin_or_tx` is exactly one pin id (current state) or one tx
+  hash (`is_historical: true`); `artifact_or_query` names evidence ids only (findings and discovery
+  records are never evidence; `S<n>` ids go in `coverage`); every finding hangs off a check of its own
+  surface (E-FINDING-UNLINKED, E-CHECK-STATUS), and a favourable proposition recorded as a row ("no
+  removal path found") hangs off a `finding`-status check with severity `info`, because `pass` checks
+  carry evidence ids only. Only the surfaces a scenario turns on are shown; broad mode rates all 11.
 - Quantities (percentages, units, block counts) are invented to make the arithmetic visible.
 
 ## Scenario 1 - Locked canonical liquidity with removable side liquidity
@@ -57,9 +63,10 @@ Discovery record (manifest `discovery[]`):
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
-| canonical_lp_principal_custody | low | low | high | full | B-CANON pass, B-PRINCIPAL pass at P1; valid until `unlockTime` or a new position |
-| side_pool_removal_risk | high | medium | high | partial | B-SIDE finding (F2); S1 covers two factories only |
-| sellability_exit_depth | medium | medium | high | full | 18% of tested depth is removable in one transaction |
+| canonical_lp_principal_custody | low | low | high | full | B-CANON pass; B-PRINCIPAL finding (F1, info: no removal path found at P1); valid until `unlockTime` or a new position |
+| side_pool_removal_risk | high | medium | high | partial | B-SIDE finding (F2, high); S1 covers two factories only |
+| sellability_exit_depth | medium | medium | high | full | C-ROUTE-DEPENDENCY finding (F4, medium; row omitted): 18% of tested depth is removable in one transaction |
+| development_disclosure | medium | medium | high | partial | H-DISCLOSURE finding (F3, medium): the "100% locked" claim is contradicted for the side pool; other H checks not shown |
 
 **Correct bounded verdict text.** "No current executable removal path found at the pinned block for the
 canonical position (NFT 4471 in `0xSYNTH-LOCKER`, unlock 63 days after P1; F1). A side pool
@@ -72,8 +79,8 @@ days: re-pin and re-test B-PRINCIPAL before the unlock; NO-GO under 'all liquidi
 | finding_id | proposition | chain_id | address | pin_or_tx | artifact_or_query | decoding_basis | evidence_type | confidence | alternatives | coverage | stale_conditions |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | F1 | At P1, position 4471 on 0xSYNTH-NPM is owned by 0xSYNTH-LOCKER, whose runtime has no principal-removal path before its `unlockTime` (P1 + 63 days) and none callable by anyone but 0xSYNTH-SIGNER after it. | 31337 (synthetic; verify at use time) | 0xSYNTH-LOCKER | P1 | E1 eth_call ownerOf(4471); E2 eth_call positions(4471); E3 eth_getCode locker; E4 eth_getStorageAt unlockTime slot; all at 0x<P1 block hex> | NPM ABI; selector walk (selector_scan.py); storage layout from source_verified locker | rpc_state | proven | A hidden path via fallback: excluded by source correspondence (E5). NFT approval/operator to a third party: `getApproved(4471)` and `isApprovedForAll` read zero (E1). | Current state at P1; `Transfer`/`Approval` history of NFT 4471 replayed from mint to P1 (no limitation). | NFT transfer, approval, `IncreaseLiquidity`/`DecreaseLiquidity`, reaching `unlockTime`, reorg of P1. |
-| F2 | At P1, 0xSYNTH-PAIR-V2 holds 18% of all pooled 0xSYNTH-TOKEN inventory and 100% of its LP tokens (less MINIMUM_LIQUIDITY) are held by the EOA 0xSYNTH-SIGNER, which can call `burn` via the router in one transaction. | 31337 (synthetic; verify at use time) | 0xSYNTH-PAIR-V2 | P1 | E6 eth_getLogs PairCreated (S1); E8 eth_call getReserves(); E9 eth_call balanceOf(0xSYNTH-SIGNER) on the pair; E10 eth_getCode 0xSYNTH-SIGNER | v2 pair ABI; `PairCreated(address,address,address,uint256)` | rpc_state | proven | LP tokens could be approved to a locker without transfer: `allowance` reads to known lockers are zero (E9). | S1 universe (two factories, full range); other DEXes not searched. | LP transfer to a locker; liquidity removal; new pool creation. |
-| F3 | The website statement "100% of liquidity locked" does not match deployed state at P1: one of two pools is locked. | 31337 (synthetic; verify at use time) | null | P1 | E11 `evidence/E11.html` (website capture, sha256 recorded); F1; F2 | raw | website | proven | The statement may refer to the v3 position only; as written it is contradicted by F2. | Website captured once at `captured_at_utc`. | Website edit; LP lock of the pair. |
+| F2 | At P1, 0xSYNTH-PAIR-V2 holds 18% of all pooled 0xSYNTH-TOKEN inventory and 100% of its LP tokens (less MINIMUM_LIQUIDITY) are held by the EOA 0xSYNTH-SIGNER, which can call `burn` via the router in one transaction. | 31337 (synthetic; verify at use time) | 0xSYNTH-PAIR-V2 | P1 | E6 eth_getLogs PairCreated; E8 eth_call getReserves(); E9 eth_call balanceOf(0xSYNTH-SIGNER) on the pair; E10 eth_getCode 0xSYNTH-SIGNER | v2 pair ABI; `PairCreated(address,address,address,uint256)` | rpc_state | proven | LP tokens could be approved to a locker without transfer: `allowance` reads to known lockers are zero (E9). | S1 universe (two factories, full range); other DEXes not searched. | LP transfer to a locker; liquidity removal; new pool creation. |
+| F3 | The website statement "100% of liquidity locked" does not match deployed state at P1: one of two pools is locked. | 31337 (synthetic; verify at use time) | null | P1 | E11 `evidence/E11.html` (website capture, sha256 recorded); E1-E4, E8-E10 (the onchain reads that contradict it) | raw (E11); NPM and v2 pair ABI (E1-E4, E8-E10) | rpc_state | proven | The statement may refer to the v3 position only; as written it is contradicted by the pair's LP holder read (E9). | Website captured once at `captured_at_utc`; onchain reads at P1; S1 universe. | Website edit; LP lock of the pair. |
 
 **The WRONG conclusion to avoid.** "Liquidity is locked for 12 months (per the website), so LP removal
 risk is low." Wrong because: the lock covers one position, bound to one locker and one unlock time;
@@ -115,8 +122,8 @@ Quote table (all at P1, route token -> wrapped native, fee 3000):
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
 | token_controls | low | low | high | full | A-MINT..A-ADMIN pass at P1 |
-| sellability_exit_depth | high | high | high | full | C-QUOTE finding (F3); C-HIST-SELL pass proves execution at that historical state only |
-| current_concentration | high | medium | high | full | D-CONC: 34% in top-10 excluding pool and burn, denominators stated |
+| sellability_exit_depth | high | high | high | full | C-QUOTE finding (F3, high; F2, info for the reference size); C-HIST-SELL finding (F1, info) proves execution at that historical state only |
+| current_concentration | high | medium | high | full | D-CONC finding (F4, high; row omitted): 34% in top-10 excluding pool and burn, denominators stated |
 
 **Correct bounded verdict text.** "Sellable at the tested sizes under the quoted state" applies to the
 small size only: at P1 a 0.01%-of-supply sell quotes at the reference per-unit output (F2), and one
@@ -170,9 +177,9 @@ deposits cannot be redirected by a single key".
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
-| token_controls | low | low | high | partial | `coverage_qualified: true`; `coverage_note`: "A-DEPLOY-HISTORY unknown (L1, rpc_pruned): deployment receipt and constructor args not readable. Current-state controls fully tested at P1; the runtime has no owner, role or upgrade selectors, so history cannot re-introduce them." |
-| admin_treasury_reward_custody | high | medium | high | full | F-TREASURY finding (F2): one EOA can replace the code custodying 41% of supply, without delay |
-| reward_accounting_liveness | high | medium | high | full | G-REWARDS finding: entitlement and conservation rules live in replaceable code (F2, F3) |
+| token_controls | low | low | high | partial | A-MINT..A-ADMIN pass; A-RENOUNCED finding (F1, info); `coverage_qualified: true`; `coverage_note`: "A-DEPLOY-HISTORY unknown (L1, rpc_pruned): deployment receipt and constructor args not readable. Current-state controls fully tested at P1; the runtime has no owner, role or upgrade selectors, so history cannot re-introduce them." |
+| admin_treasury_reward_custody | high | high | high | full | G-LAYER-ADMIN finding (F2, high; F3, medium: the path was exercised twice): one EOA can replace the code custodying 41% of supply, without delay; likelihood high because that key has used the authority |
+| reward_accounting_liveness | medium | medium | high | full | G-REWARDS pass: conservation and entitlement verified at P1; rated medium, not low, because the accounting code is replaceable (G-LAYER-ADMIN, F2) - the authority itself is rated once, under admin_treasury_reward_custody |
 | current_concentration | medium | medium | high | full | 41% classified as protocol custody, stated separately from holder balances |
 
 **Correct bounded verdict text.** "No mint, upgrade, seizure, restriction, tax or external-call path
@@ -191,11 +198,12 @@ holding under 'token code immutability': do not stake; re-test A-checks at a new
 
 **The WRONG conclusion to avoid.** "The token is immutable and renounced, so the system cannot be
 rugged." Wrong because ratings are per surface: `token_controls` describes the token's code, while
-the layer that holds 41% of supply is replaceable by one key and is rated under
-`admin_treasury_reward_custody` and `reward_accounting_liveness`. Two further wrong moves: rating
-`token_controls` `low` while `A-DEPLOY-HISTORY` is `unknown` without `coverage_qualified: true` and a
-`coverage_note` (validator E-RATING-UNKNOWN-AS-LOW), and the reverse error of rating `token_controls`
-`high` because the vault is upgradeable, which moves a finding onto the wrong surface.
+the layer that holds 41% of supply is replaceable by one key and is rated once, under
+`admin_treasury_reward_custody` (`G-LAYER-ADMIN`); `reward_accounting_liveness` only reflects that its
+accounting code is replaceable. Three further wrong moves: rating `token_controls` `low` while
+`A-DEPLOY-HISTORY` is `unknown` without `coverage_qualified: true` and a `coverage_note` (validator
+E-RATING-UNKNOWN-AS-LOW); rating `token_controls` `high` because the vault is upgradeable, which moves a
+finding onto the wrong surface; and repeating the same authority finding on two surfaces.
 
 ## Scenario 4 - Launch wallets selling and rebuying for new recipients (market-mediated redistribution)
 
@@ -228,7 +236,7 @@ bought a similar quantity. All fifteen wallets were funded from `0xSYNTH-EXCH-HO
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
-| historical_launch_integrity | high | high | high | full | E-EARLY-SALES finding (F1); the event already occurred, so likelihood describes recurrence for retained inventory |
+| historical_launch_integrity | high | high | high | full | E-EARLY-SALES finding (F1, high; F2, info); the event already occurred, so likelihood describes recurrence for retained inventory |
 | current_concentration | medium | medium | high | full | D-CONC: R1..R9 9.1% and W1..W6 retained balance classified as `holder`, provenance `event_derived` |
 
 **Correct bounded verdict text.** "Proven at tx `0xSYNTH-TX-S1..S14`: the six direct-buy allocation
@@ -243,8 +251,8 @@ material early selling by allocation recipients; the 'insider rotation' reading 
 
 | finding_id | proposition | chain_id | address | pin_or_tx | artifact_or_query | decoding_basis | evidence_type | confidence | alternatives | coverage | stale_conditions |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| F1 | Cohort C1 (S1: six direct-buy recipients, blocks L..L+15) sold 62% of its allocation into 0xSYNTH-POOL in 14 successful txs within 400 blocks of launch, receiving 41.3 quote units after pool fee. | 31337 (synthetic; verify at use time) | null | 0xSYNTH-TX-S1 (and S2..S14 listed in E20) | E20 receipts + `Swap` decodes for 14 txs; E19 direct-buy calldata (recipient param); S1 | `Swap` event ABI; direct-buy function ABI from source_verified platform | receipt | proven | Router transfers without execution: excluded by receipts and pool mechanics. Sales by a non-cohort wallet holding cohort tokens: excluded by `Transfer` replay of cohort balances (E21). | Blocks L..L+400 fully read; cohort defined before measurement. | Never for the window; later sales belong to a follow-up range. |
-| F2 | Purchases by R1..R9 (58% of C1's sold quantity, blocks L+400..L+2400) are market-mediated redistribution through 0xSYNTH-POOL; no evidence links any R wallet to a C1 wallet. | 31337 (synthetic; verify at use time) | null | P1 | E22 `Swap` decodes for R1..R9; E23 calldata of all C1 txs (no R recipient); E24 traces of funding from 0xSYNTH-EXCH-HOT; E25 explorer label capture | `Swap` ABI; router ABI; trace `CALL` value transfers | log_decoded | inference | Common control of W and R wallets: consistent with timing and shared exchange funding, but exchanges fund unrelated users from one hot wallet by design; no trace, batch, controlling contract or recipient parameter found. Unrelated buyers: equally consistent. | Blocks L..L+2400; commingling stop at 0xSYNTH-EXCH-HOT (F-COMMINGLING). | A trace, calldata recipient or controlling contract linking an R wallet to C1; a reorg of P1. |
+| F1 | Cohort C1 (S1: six direct-buy recipients, blocks L..L+15) sold 62% of its allocation into 0xSYNTH-POOL in 14 successful txs within 400 blocks of launch, receiving 41.3 quote units after pool fee. | 31337 (synthetic; verify at use time) | null | 0xSYNTH-TX-S1 | E20 receipts + `Swap` decodes for 14 txs; E19 direct-buy calldata (recipient param) | `Swap` event ABI; direct-buy function ABI from source_verified platform | receipt | proven | Router transfers without execution: excluded by receipts and pool mechanics. Sales by a non-cohort wallet holding cohort tokens: excluded by `Transfer` replay of cohort balances (E21). | Blocks L..L+400 fully read; cohort defined before measurement (S1); 14 txs S1..S14 (receipts in E20), pin_or_tx cites the first. | Never for the window; later sales belong to a follow-up range. |
+| F2 | Purchases by R1..R9 (58% of C1's sold quantity, blocks L+400..L+2400) are market-mediated redistribution through 0xSYNTH-POOL; no evidence links any R wallet to a C1 wallet. | 31337 (synthetic; verify at use time) | null | 0xSYNTH-TX-R1 | E22 `Swap` decodes for R1..R9; E23 calldata of all C1 txs (no R recipient); E24 traces of funding from 0xSYNTH-EXCH-HOT; E25 explorer label capture | `Swap` ABI; router ABI; trace `CALL` value transfers | log_decoded | inference | Common control of W and R wallets: consistent with timing and shared exchange funding, but exchanges fund unrelated users from one hot wallet by design; no trace, batch, controlling contract or recipient parameter found. Unrelated buyers: equally consistent. | Blocks L+400..L+2400 (S1 follow-up range); nine purchase receipts in E22, pin_or_tx cites the first; commingling stop at 0xSYNTH-EXCH-HOT (F-COMMINGLING). | A trace, calldata recipient or controlling contract linking an R wallet to C1. |
 
 **The WRONG conclusion to avoid.** "Insiders dumped 62% and re-accumulated under fresh wallets funded
 from the same exchange." Wrong because: "insider" needs a non-market allocation path and a definition in
@@ -286,10 +294,10 @@ vault holds 100,000 units of `0xSYNTH-WASSET`, a bridged representation of ASSET
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
-| utility_redemption_rights | high | high | high | partial | G-RIGHTS finding (F1, F2); the issuer's off-chain release process is not observable |
-| external_dependencies | high | medium | high | partial | H-DEPS finding: exit depends on a paused bridge controlled by one role holder |
-| admin_treasury_reward_custody | high | medium | high | full | F-TREASURY finding: owner can `sweep`, `decreaseLiquidity`, `collect` and set `rate()` |
-| reward_accounting_liveness | medium | medium | medium | partial | G-REWARDS: redemptions process, but only into the synthetic claim |
+| utility_redemption_rights | high | high | high | partial | G-RIGHTS finding (F1, high); G-EXIT-ROUTE finding (F3, medium); the issuer's off-chain release process is not observable |
+| external_dependencies | high | medium | high | partial | H-DEPS finding (F2, high): exit depends on a paused bridge controlled by one role holder |
+| admin_treasury_reward_custody | high | medium | high | full | G-LAYER-ADMIN finding (F4, high; row omitted): owner can `sweep`, `decreaseLiquidity`, `collect` and set `rate()` |
+| reward_accounting_liveness | medium | medium | medium | partial | G-REWARDS pass (redemptions process), rated medium because they deliver only the synthetic claim |
 
 **Correct bounded verdict text.** "Holders can redeem for `0xSYNTH-WASSET`, a synthetic claim, at an
 owner-set rate (F1). No executable exit from WASSET to the underlying asset was found at the pinned
@@ -347,12 +355,15 @@ The check as it must appear (manifest `checks[]`):
  "reason": "Position owner, liquidity and locker code at P1 unreadable: L1 (rpc_pruned, 3 retries); fallback L2 (dns_failure). The historical NFT transfer to 0xSYNTH-LOCKER at block 1201000 (E2) is not current state.",
  "pin_id": "P1", "limitation_id": "L1"}
 ```
+F2 (confidence `unknown`) may hang off the `unknown` check; F1 (proven, historical) may not (E-CHECK-STATUS:
+an unknown check contradicts a proven finding), so it hangs off an added check `B-NFT-CUSTODY-HISTORY`
+(`status: finding`, `severity: info`, same surface) that is listed in the rating's basis.
 
 **Correct ratings.**
 
 | Surface | Rating | Likelihood | Confidence | Coverage | Note |
 |---|---|---|---|---|---|
-| canonical_lp_principal_custody | unknown | unknown | low | partial | B-CANON pass (pool identified by address, E1); B-PRINCIPAL unknown (L1, L2); `time_basis_pin_id: P1` |
+| canonical_lp_principal_custody | unknown | unknown | low | partial | B-CANON pass (pool identified by address, E1); B-NFT-CUSTODY-HISTORY finding (F1, info); B-PRINCIPAL unknown (L1, L2); `time_basis_pin_id: P1` |
 
 **Correct bounded verdict text.** "Unknown because historical state was unavailable: the owner and
 liquidity of position 4471 and the code of `0xSYNTH-LOCKER` at the pinned block could not be read (L1

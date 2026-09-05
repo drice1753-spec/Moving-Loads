@@ -169,10 +169,10 @@ Finding row:
 ```json
 { "finding_id": "F31", "surface": "historical_launch_integrity", "severity": "medium",
   "proposition": "Cohort C1 (<n> addresses, <pct>% of supply at P2) sold <int> base units (<pct>% of its allocation) into <pool> in <k> receipt-proven transactions between blocks <a> and <b>; <int> <quote> was delivered to <m> recipient addresses; <pct>% of the allocation is retained at P1 directly or by funded downstream addresses.",
-  "chain_id": <chain_id>, "address": "<pool>", "pin_or_tx": "P1",
+  "chain_id": <chain_id>, "address": "<pool>", "pin_or_tx": "<first sale tx hash>",
   "evidence_ids": ["E61", "E62"], "evidence_type": "receipt", "confidence": "strongly_supported",
   "alternatives": "Buys by new addresses after the sales are market-mediated redistribution; common control of sellers and buyers is not established by timing or shared funding.",
-  "coverage": "cohort window L..L+N full; funding sources partial (L8)",
+  "coverage": "cohort window L..L+N full; <k> sale receipts in E61, pin_or_tx cites the first; retained share read at P1; funding sources partial (L8)",
   "stale_conditions": "retained share changes with any transfer after P1; historical rows do not go stale",
   "is_historical": true }
 ```

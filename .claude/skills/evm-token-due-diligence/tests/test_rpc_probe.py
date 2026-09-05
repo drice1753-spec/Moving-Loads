@@ -23,6 +23,7 @@ import rpc_probe  # noqa: E402
 from mock_rpc import (  # noqa: E402
     HttpStatus,
     JsonRpcError,
+    RawResponseServer,
     abi_address,
     abi_bool,
     abi_bytes32_text,
@@ -141,7 +142,9 @@ def make_handlers(chain_hex: str = "0x1", code: dict | None = None, storage: dic
 
 class ProbeTestBase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="rpc_probe_test_")
+        tmpdir = tempfile.TemporaryDirectory(prefix="rpc_probe_test_")
+        self.addCleanup(tmpdir.cleanup)  # nothing is left behind in the temp directory
+        self.tmp = tmpdir.name
         self.servers = []
 
     def tearDown(self):
@@ -157,7 +160,8 @@ class ProbeTestBase(unittest.TestCase):
 
     def run_probe(self, url, *extra, out_name="packet.json"):
         out = os.path.join(self.tmp, out_name)
-        argv = ["--rpc", url, "--address", TOKEN, "--out", out, *extra]
+        # --retries 0 keeps the tests fast; a test that exercises retries passes its own --retries after it
+        argv = ["--rpc", url, "--address", TOKEN, "--out", out, "--retries", "0", *extra]
         so, se = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
             code = rpc_probe.main(argv)
@@ -174,10 +178,12 @@ class HappyPathTests(ProbeTestBase):
         code, packet, out, err = self.run_probe(url, "--chain-id", "1")
         self.assertEqual(code, 0, err)
         self.assertEqual(packet["identity"]["status"], "MATCH")
+        self.assertEqual((packet["identity"]["requested"], packet["identity"]["observed"]), (1, 1))
         self.assertEqual(packet["observed"]["chain_id"], 1)
         self.assertEqual(packet["observed"]["rpc_chain_id_hex"], "0x1")
         self.assertEqual(packet["observed"]["client_version"], "mock-node/0.0.0")
         self.assertEqual(packet["requested"], {"chain_id": 1, "address": TOKEN, "address_checksum": TOKEN})
+        self.assertEqual(packet["cache"], {"status": "none", "chain_id": 1, "note": None})
 
         pin = packet["pin"]
         self.assertEqual(pin["pin_id"], "P1")
@@ -195,6 +201,7 @@ class HappyPathTests(ProbeTestBase):
         self.assertEqual(rt["code_hash"], ddcore.keccak256_hex(TOKEN_CODE))
         self.assertEqual(rt["code_size"], len(TOKEN_CODE))
         self.assertTrue(rt["is_contract"])
+        self.assertEqual(rt["runtime_status"], "contract")  # manifest vocabulary, copied verbatim into scope_addresses
         self.assertEqual(rt["proxy"]["status"], "not_proxy")
         self.assertIn("custom proxies possible", rt["proxy"]["basis"])
         self.assertEqual(len(rt["proxy"]["slots_read"]), 4)
@@ -211,6 +218,7 @@ class HappyPathTests(ProbeTestBase):
         for k in ("name", "symbol", "decimals", "total_supply"):
             self.assertTrue(meta[k]["raw"].startswith("0x"), k)
             self.assertIn("P1", meta[k]["source"])
+            self.assertIsNone(meta[k]["qualifier"])
 
         probes = {p["name"]: p for p in packet["probes"]}
         self.assertEqual(probes["owner()"]["selector"], "0x8da5cb5b")
@@ -219,11 +227,12 @@ class HappyPathTests(ProbeTestBase):
         self.assertEqual(probes["getOwner()"]["status"], "reverted")
         self.assertEqual(probes["paused()"]["status"], "ok")
         self.assertIs(probes["paused()"]["decoded_candidates"]["bool"], False)
+        self.assertTrue(all(p["qualifier"] is None for p in packet["probes"]))
 
         self.assertEqual(packet["coverage_status"], "complete")
         self.assertEqual(packet["limitations"], [])
         self.assertTrue(packet["calls"])
-        self.assertTrue(all(c["cached"] is False for c in packet["calls"]))
+        self.assertTrue(all(c["cached"] is False and c["outcome"] == "ok" for c in packet["calls"]))
         self.assertEqual(packet["declarations"], {
             "no_real_signing": True, "no_broadcast": True,
             "no_private_keys_requested": True, "read_only_methods_only": True,
@@ -311,6 +320,20 @@ class HappyPathTests(ProbeTestBase):
         self.assertEqual(bal["calldata"], balance_sel + "0" * 24 + OWNER[2:].lower())
         self.assertEqual(probes["0xdeadbeef"]["decoded_candidates"]["string"], "hello")
 
+    def test_block_tags_safe_and_finalized(self):
+        for tag in ("safe", "finalized"):
+            url, server = self.serve(make_handlers())
+            rc, packet, out, err = self.run_probe(url, "--chain-id", "1", "--block", tag, out_name=f"{tag}.json")
+            self.assertEqual(rc, 0, err)
+            self.assertEqual(server.params_for("eth_getBlockByNumber"), [[tag, False]])
+            self.assertEqual(packet["pin"]["block_number"], BLOCK_NUMBER)
+            # the tag is resolved to a number: every later read is at the pinned hex, never at the tag
+            for method in ("eth_getCode", "eth_getStorageAt", "eth_call"):
+                for params in server.params_for(method):
+                    self.assertEqual(params[-1], PINNED_HEX)
+        help_text = rpc_probe.build_parser().format_help()
+        self.assertIn("latest|safe|finalized|N", help_text)
+
 
 class IdentityAndCoverageTests(ProbeTestBase):
     def test_d_chain_mismatch(self):
@@ -318,15 +341,28 @@ class IdentityAndCoverageTests(ProbeTestBase):
         code, packet, out, err = self.run_probe(url, "--chain-id", "8453")
         self.assertEqual(code, 3)
         self.assertEqual(packet["identity"]["status"], "CHAIN_MISMATCH")
+        self.assertEqual((packet["identity"]["requested"], packet["identity"]["observed"]), (8453, 1))
         self.assertEqual(packet["requested"]["chain_id"], 8453)
         self.assertEqual(packet["observed"]["chain_id"], 1)
         self.assertIn("requested chain 8453 but RPC reports 1", err)
         self.assertIn("same-symbol token on another chain is not the target", err)
+        # an identity failure is recorded under identity only, never as a coverage limitation
+        self.assertEqual(packet["limitations"], [])
+        self.assertIn("identity failure, not a coverage limitation", packet["identity"]["detail"])
         # no reads were made at the address on the wrong chain
         self.assertEqual(server.count("eth_getCode"), 0)
         self.assertEqual(server.count("eth_call"), 0)
         self.assertIsNone(packet["pin"])
         self.assertEqual(packet["coverage_status"], "partial")
+
+    def test_d2_chain_id_bool_is_unverified(self):
+        url, server = self.serve(make_handlers(overrides={"eth_chainId": True}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1")
+        self.assertEqual(code, 1)
+        self.assertEqual(packet["identity"]["status"], "UNVERIFIED")
+        self.assertIsNone(packet["observed"]["chain_id"])
+        self.assertEqual(server.count("eth_getCode"), 0)
+        self.assertIn("non-quantity", packet["limitations"][0]["description"])
 
     def test_e_rate_limit_on_storage_is_a_limitation(self):
         def storage_429(params):
@@ -334,7 +370,7 @@ class IdentityAndCoverageTests(ProbeTestBase):
 
         url, server = self.serve(make_handlers(overrides={"eth_getStorageAt": storage_429}))
         with mock.patch("time.sleep", lambda s: None):  # skip ddcore retry backoff
-            code, packet, out, err = self.run_probe(url, "--chain-id", "1")
+            code, packet, out, err = self.run_probe(url, "--chain-id", "1", "--retries", "2")
         self.assertEqual(code, 0, err)
         self.assertEqual(packet["coverage_status"], "partial")
         kinds = {lim["kind"] for lim in packet["limitations"]}
@@ -358,12 +394,89 @@ class IdentityAndCoverageTests(ProbeTestBase):
             raise JsonRpcError(-32000, "missing trie node: historical state unavailable")
 
         url, server = self.serve(make_handlers(overrides={"eth_getBlockByNumber": no_block}))
-        code, packet, out, err = self.run_probe(url, "--chain-id", "1", "--block", "5")
+        # pruned state never reappears: no retry, hence no backoff sleep even with retries enabled
+        with mock.patch("time.sleep", side_effect=AssertionError("rpc_pruned must not be retried")):
+            code, packet, out, err = self.run_probe(url, "--chain-id", "1", "--block", "5", "--retries", "2")
         self.assertEqual(code, 1)
         self.assertIsNone(packet["pin"])
         self.assertEqual(packet["limitations"][0]["kind"], "rpc_pruned")
+        self.assertEqual(packet["limitations"][0]["retry_attempts"], 0)
+        self.assertEqual(server.count("eth_getBlockByNumber"), 1)
         self.assertEqual(packet["coverage_status"], "partial")
         self.assertEqual(server.count("eth_getCode"), 0)
+
+    def test_e3_timestamp_overflow_is_a_pin_limitation(self):
+        url, server = self.serve(make_handlers(overrides={"eth_getBlockByNumber": lambda p: {**HEADER, "timestamp": "0xffffffffffffffff"}}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1")
+        self.assertEqual(code, 1)
+        self.assertIsNone(packet["pin"])
+        self.assertEqual(packet["limitations"][0]["kind"], "rpc_error")
+        self.assertIn("timestamp out of range", packet["limitations"][0]["description"])
+        self.assertEqual(server.count("eth_getCode"), 0)
+
+    def test_e4_malformed_http_is_a_limitation(self):
+        with RawResponseServer(b"garbage\r\n\r\n") as srv:
+            code, packet, out, err = self.run_probe(srv.url, "--chain-id", "1", "--timeout", "3")
+        self.assertEqual(code, 1)
+        self.assertEqual(packet["identity"]["status"], "UNVERIFIED")
+        self.assertEqual(packet["limitations"][0]["kind"], "rpc_error")
+        self.assertIn("malformed HTTP response", packet["limitations"][0]["description"])
+
+    def test_e5_non_string_code_and_storage_are_limitations(self):
+        # eth_getCode -> null must never become "EOA / not a contract" with complete coverage
+        url, server = self.serve(make_handlers(overrides={"eth_getCode": lambda p: None}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1")
+        self.assertEqual(code, 0, err)
+        rt = packet["runtime"]
+        self.assertEqual(rt["runtime_status"], "unknown")
+        self.assertIsNone(rt["is_contract"])
+        self.assertIsNone(rt["code_hash"])
+        self.assertEqual(rt["proxy"]["status"], "unknown")
+        self.assertEqual(packet["coverage_status"], "partial")
+        self.assertEqual(packet["limitations"][0]["kind"], "rpc_error")
+        self.assertIn("non-string", packet["limitations"][0]["description"])
+        self.assertIn("A-UPGRADE", packet["limitations"][0]["affected_check_ids"])
+        # eth_getStorageAt -> null must never become "not_proxy"
+        url, server = self.serve(make_handlers(overrides={"eth_getStorageAt": lambda p: None}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1", out_name="storage.json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(packet["runtime"]["runtime_status"], "contract")
+        self.assertEqual(packet["runtime"]["proxy"]["status"], "unknown")
+        self.assertEqual(packet["coverage_status"], "partial")
+        self.assertEqual(len(packet["limitations"]), 4)
+        self.assertTrue(all("A-UPGRADE" in lim["affected_check_ids"] for lim in packet["limitations"]))
+        # a non-string eth_call result is a malformed response too, not a silent "unresolved"
+        url, server = self.serve(make_handlers(overrides={"eth_call": lambda p: {"weird": 1}}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1", out_name="call.json")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(packet["coverage_status"], "partial")
+        self.assertEqual(packet["metadata"]["symbol"]["status"], "unresolved")
+        self.assertIn("limitation", packet["metadata"]["symbol"]["reason"])
+        self.assertTrue(all(p["status"] == "unavailable" for p in packet["probes"]))
+
+    def test_e6_eoa_target_is_qualified(self):
+        # the mock still answers eth_call for the address: a lying or misrouted endpoint must be visible
+        url, server = self.serve(make_handlers(code={TOKEN: "0x"}))
+        code, packet, out, err = self.run_probe(url, "--chain-id", "1")
+        self.assertEqual(code, 0, err)
+        rt = packet["runtime"]
+        self.assertEqual(rt["runtime_status"], "eoa")
+        self.assertFalse(rt["is_contract"])
+        self.assertEqual(rt["code_hash"], ddcore.EMPTY_CODE_HASH)
+        self.assertEqual(server.count("eth_getStorageAt"), 0)
+        self.assertGreater(server.count("eth_call"), 0)  # calls are still made
+        for k, m in packet["metadata"].items():
+            self.assertEqual(m["status"], "unresolved", k)
+            self.assertIsNone(m["value"], k)
+            self.assertEqual(m["qualifier"], rpc_probe.EOA_QUALIFIER, k)
+            self.assertIn(rpc_probe.EOA_QUALIFIER, m["reason"], k)
+            self.assertTrue(m["raw"].startswith("0x"), k)  # what the endpoint said is preserved
+        self.assertIn("inconsistent", packet["metadata"]["symbol"]["reason"])
+        for p in packet["probes"]:
+            self.assertEqual(p["qualifier"], rpc_probe.EOA_QUALIFIER)
+            self.assertTrue(p["detail"].startswith("INCONSISTENT:"), p)
+        self.assertEqual(packet["coverage_status"], "complete")
+        self.assertIn("runtime_status=eoa", out)
 
     def test_f_only_allowlisted_methods(self):
         url, server = self.serve(make_handlers())
@@ -385,25 +498,66 @@ class IdentityAndCoverageTests(ProbeTestBase):
         first_counts = {m: server.count(m) for m in ("eth_getCode", "eth_getStorageAt", "eth_call", "eth_getBlockByNumber", "eth_chainId")}
         self.assertTrue(all(c["cached"] is False for c in p1["calls"]))
 
+        self.assertEqual(p1["cache"]["status"], "used")
+        self.assertEqual([f["cached"] for f in p1["failed_calls"]], [False])
+
         code2, p2, _, err2 = self.run_probe(url, "--chain-id", "1", "--block", str(BLOCK_NUMBER), "--cache", cache, out_name="p2.json")
         self.assertEqual(code2, 0, err2)
         pinned_reads = [c for c in p2["calls"] if c["method"] in ("eth_getCode", "eth_getStorageAt", "eth_call", "eth_getBlockByNumber")]
         self.assertTrue(pinned_reads)
         self.assertTrue(all(c["cached"] is True for c in pinned_reads), pinned_reads)
-        for m in ("eth_getCode", "eth_getStorageAt", "eth_getBlockByNumber"):
+        for m in ("eth_getCode", "eth_getStorageAt", "eth_getBlockByNumber", "eth_call"):
             self.assertEqual(server.count(m), first_counts[m], f"{m} was re-sent despite the cache")
-        # ddcore caches successful results only: the one reverting probe (getOwner()) is re-sent,
-        # every successful eth_call is served from the cache
-        resent = [p for p in server.params_for("eth_call")][first_counts["eth_call"]:]
-        self.assertEqual([p[0]["data"] for p in resent], [SEL["getOwner"]])
-        self.assertEqual([f["outcome"] for f in p2["failed_calls"]], ["reverted"])
+        # the reverting probe (getOwner()) is a fact about the contract at the pin: cached and replayed as a revert,
+        # recorded in calls with its outcome and in failed_calls as cached
+        replayed = [c for c in p2["calls"] if c["method"] == "eth_call" and c["outcome"] == "reverted"]
+        self.assertEqual([c["params"][0]["data"] for c in replayed], [SEL["getOwner"]])
+        self.assertEqual([(f["outcome"], f["cached"]) for f in p2["failed_calls"]], [("reverted", True)])
+        self.assertEqual({p["name"]: p["status"] for p in p2["probes"]}["getOwner()"], "reverted")
         # identity facts are never served from the cache
         self.assertEqual(server.count("eth_chainId"), first_counts["eth_chainId"] + 1)
         self.assertTrue(all(c["cached"] is False for c in p2["calls"] if c["method"] == "eth_chainId"))
         self.assertEqual(p2["pin"]["block_hash"], p1["pin"]["block_hash"])
         self.assertEqual(p2["runtime"]["code_hash"], p1["runtime"]["code_hash"])
         with open(cache, encoding="utf-8") as f:
-            self.assertNotIn(FAKE_KEY, f.read())
+            text = f.read()
+        self.assertNotIn(FAKE_KEY, text)
+        header = json.loads(text)
+        self.assertEqual((header["cache_version"], header["chain_id"]), (ddcore.CACHE_FORMAT_VERSION, 1))
+        self.assertTrue(all(e["chain_id"] == 1 for e in header["entries"].values()))
+
+    def test_h_cross_chain_cache_isolation(self):
+        """Two mocks on 127.0.0.1 at different ports serving different chains share one --cache file: the second
+        run must NOT be served chain-1 facts (cached=False on eth_getCode, its own code hash and symbol)."""
+        code_a = "0x" + (b"\x60\x80" + hashlib.sha256(b"chain 1 runtime").digest()).hex()
+        code_b = "0x" + (b"\x60\x80" + hashlib.sha256(b"chain 8453 runtime").digest()).hex()
+        url_a, server_a = self.serve(make_handlers(chain_hex="0x1", code={TOKEN: code_a}, calls={SEL["symbol"]: abi_string("ETHTOKEN")}), path="/eth")
+        url_b, server_b = self.serve(make_handlers(chain_hex="0x2105", code={TOKEN: code_b}, calls={SEL["symbol"]: abi_string("BASETOKEN")}), path="/base")
+        cache = os.path.join(self.tmp, "shared-cache.json")
+        code1, pa, _, err_a = self.run_probe(url_a, "--chain-id", "1", "--block", str(BLOCK_NUMBER), "--cache", cache, out_name="a.json")
+        self.assertEqual(code1, 0, err_a)
+        code2, pb, out_b, err_b = self.run_probe(url_b, "--chain-id", "8453", "--block", str(BLOCK_NUMBER), "--cache", cache, out_name="b.json")
+        self.assertEqual(code2, 0, err_b)
+        self.assertEqual(pb["identity"]["status"], "MATCH")
+        self.assertEqual([c["cached"] for c in pb["calls"] if c["method"] == "eth_getCode"], [False])
+        self.assertEqual(pb["runtime"]["code_hash"], ddcore.keccak256_hex(bytes.fromhex(code_b[2:])))
+        self.assertNotEqual(pb["runtime"]["code_hash"], pa["runtime"]["code_hash"])
+        self.assertEqual(pb["metadata"]["symbol"]["value"], "BASETOKEN")
+        self.assertEqual(server_b.count("eth_getCode"), 1)
+        # the file was recorded for chain 1, so run B refused it: nothing read from or written to it
+        self.assertEqual(pb["cache"]["status"], "ignored")
+        self.assertIn("belongs to chain 1", pb["cache"]["note"])
+        self.assertIn("WARNING", err_b)
+        with open(cache, encoding="utf-8") as f:
+            header = json.load(f)
+        self.assertEqual(header["chain_id"], 1)
+        self.assertTrue(all(e["chain_id"] == 1 for e in header["entries"].values()))
+        # and a fresh run on chain 1 still uses the file
+        code3, pa2, _, err3 = self.run_probe(url_a, "--chain-id", "1", "--block", str(BLOCK_NUMBER), "--cache", cache, out_name="a2.json")
+        self.assertEqual(code3, 0, err3)
+        self.assertEqual(pa2["cache"]["status"], "used")
+        self.assertEqual([c["cached"] for c in pa2["calls"] if c["method"] == "eth_getCode"], [True])
+        self.assertEqual(server_a.count("eth_getCode"), 1)
 
 
 class UsageTests(ProbeTestBase):
@@ -451,6 +605,21 @@ class UsageTests(ProbeTestBase):
         self.assertEqual(code, 2)
         self.assertIn("expects 1 argument", err)
         self.assertEqual(server.calls, [])
+        # integer arguments must fit the declared width: never send calldata no ABI decoder would accept
+        for spec, fragment in (("foo(uint8):300", "out of range"), ("foo(uint256):-1", "out of range"),
+                               ("foo(int8):-129", "out of range"), ("foo(uint7):1", "width"), ("foo(uint8):x", "not an integer")):
+            code, packet, out, err = self.run_probe(url, "--call", spec, out_name="never.json")
+            self.assertEqual(code, 2, spec)
+            self.assertIn(fragment, err, spec)
+        self.assertEqual(server.calls, [])
+
+    def test_userinfo_url_exit_2(self):
+        url, server = self.serve(make_handlers())
+        code, packet, out, err = self.run_probe(url.replace("http://", "http://alice:QUERYSECRET@"), "--chain-id", "1")
+        self.assertEqual(code, 2)
+        self.assertIn("userinfo", err)
+        self.assertNotIn("QUERYSECRET", err)
+        self.assertEqual(server.calls, [])
 
     def test_json_flag_prints_packet(self):
         url, server = self.serve(make_handlers())
@@ -491,6 +660,15 @@ class UnitHelperTests(unittest.TestCase):
             rpc_probe.parse_call_spec("foo(string):x")
         with self.assertRaises(ValueError):
             rpc_probe.parse_call_spec("not a signature")
+        # width validation
+        self.assertTrue(rpc_probe.parse_call_spec("foo(uint8):255")[1].endswith("ff"))
+        self.assertTrue(rpc_probe.parse_call_spec("foo(int8):-128")[1].endswith("ff" * 31 + "80"))
+        self.assertTrue(rpc_probe.parse_call_spec("foo(uint):0x10")[1].endswith("10"))
+        for bad in ("foo(uint8):256", "foo(int8):-129", "foo(int8):128", "foo(uint):-1", "foo(uint7):1", "foo(uint264):1"):
+            with self.assertRaises(ValueError, msg=bad):
+                rpc_probe.parse_call_spec(bad)
+        self.assertEqual(rpc_probe._abi_kind("uint"), ("uint", 256))
+        self.assertEqual(rpc_probe._abi_kind("int24"), ("int", 24))
 
     def test_find_key_material(self):
         self.assertIsNone(rpc_probe.find_key_material(["--rpc", "http://127.0.0.1:1", "--address", TOKEN]))
@@ -503,10 +681,14 @@ class UnitHelperTests(unittest.TestCase):
 
     def test_normalize_block_arg(self):
         self.assertEqual(rpc_probe.normalize_block_arg("latest"), "latest")
+        self.assertEqual(rpc_probe.normalize_block_arg("safe"), "safe")
+        self.assertEqual(rpc_probe.normalize_block_arg("Finalized"), "finalized")
         self.assertEqual(rpc_probe.normalize_block_arg("20000000"), "0x1312d00")
         self.assertEqual(rpc_probe.normalize_block_arg("0x01312D00"), "0x1312d00")
         with self.assertRaises(ValueError):
             rpc_probe.normalize_block_arg("pending")
+        with self.assertRaises(ValueError):
+            rpc_probe.normalize_block_arg("-5")
 
 
 if __name__ == "__main__":

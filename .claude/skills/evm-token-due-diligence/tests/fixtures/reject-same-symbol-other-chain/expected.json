@@ -2,7 +2,8 @@
   "expect": "fail",
   "expected_codes": [
     "E-CHAIN-MISMATCH",
-    "E-SCOPE-TARGET"
+    "E-SCOPE-TARGET",
+    "E-SCOPE-ADDRESS"
   ],
   "forbidden_codes": [
     "E-SCHEMA",
@@ -20,11 +21,16 @@
     "E-REPORT-IDENTITY",
     "E-REPORT-TARGET-ABSENT",
     "E-REPORT-SECTIONS",
+    "E-REPORT-RATINGS",
+    "E-REPORT-VERDICT",
     "E-CHECK-CORE-MISSING",
     "E-CHECK-STATUS",
+    "E-CHECK-DISCOVERY-ONLY",
     "E-EVIDENCE-DANGLING",
     "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-UNLINKED",
     "E-FINDING-CHAIN",
+    "E-FINDING-EVIDENCE-TYPE",
     "E-RATING-MISSING",
     "E-RATING-UNKNOWN-AS-LOW",
     "E-RATING-CRITICAL-AVERAGED",
@@ -32,5 +38,5 @@
     "E-DECL-FORK",
     "E-MODE-MISMATCH"
   ],
-  "notes": "Same-symbol token substituted from chain 1: requested 8453 but RPC observed 0x1 and the scoped token entry is on chain 1. E-CHAIN-UNPINNED is an unavoidable side effect (chain 1 has no pin)."
+  "notes": "Same-symbol token substituted from chain 1: requested 8453 but RPC observed 0x1 and the scoped token entry is on chain 1, so every evidence row and finding that cites the token address on chain 8453 is unscoped (E-SCOPE-ADDRESS). E-CHAIN-UNPINNED is an unavoidable side effect (chain 1 has no pin)."
 }

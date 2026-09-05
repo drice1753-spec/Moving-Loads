@@ -1,8 +1,8 @@
 # Surface H - Utility, dependencies, and development
 
 Rating keys: `utility_redemption_rights` (core check `H-UTILITY`, shared with `G-RIGHTS`),
-`external_dependencies` (core check `H-DEPS`), `development_disclosure` (core check `H-DEV`).
-Sub-checks: `H-SOURCE-CORRESPONDENCE`, `H-AUDIT-SCOPE`, `H-DISCLOSURE`. Read this file for any
+`external_dependencies` (core check `H-DEPS`), `development_disclosure` (core check `H-DEV`); the checks
+table states which key each check feeds. Sub-checks: `H-SOURCE-CORRESPONDENCE`, `H-AUDIT-SCOPE`, `H-DISCLOSURE`. Read this file for any
 question about "what is the token for", "is the utility real", "what does it depend on", "is it
 audited", "does the source match", or "does the team do what the docs say"; always in `broad` mode.
 
@@ -164,20 +164,20 @@ Admin history binds to tx hashes over deployment..P1.
 
 ## Checks
 
-| check_id | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
-|---|---|---|---|---|
-| H-UTILITY | Each advertised utility is live, linked to the target contract, and enforceable by code (or is a promise) | code at P1 + one use receipt moving the target token + path guard | `rpc_state`, `receipt`, `bytecode` | utility contract upgrade or token pointer change; window expiry for "live" |
-| H-DEPS | Every material dependency is inventoried with failure mode, controller, upgradeability and liveness | one row per dependency with reads at P1 | `rpc_state`, `rpc_storage`, `receipt` | dependency admin action, feed change, keeper stop |
-| H-DEV | Source correspondence, build/tests, audit scope, release controls, governance and disclosure accuracy are assessed against the deployed code and observed behavior | steps 3-9 rows | `bytecode`, `rpc_state`, `log_decoded`, `source_verified` | upgrade (new code hash), new admin actions |
-| H-SOURCE-CORRESPONDENCE | Published source compiles to the runtime at P1 (per runtime, deduplicated by code hash) | metadata trailer decode + hash/byte comparison with listed exclusions | `bytecode`, `source_verified` | upgrade |
-| H-AUDIT-SCOPE | Each audit's scope covers the deployed code hash and the contracts that matter, or the gap is stated | audit-named commit/hashes vs P1 code hashes | `bytecode`, `repository` (report, untrusted) | upgrade; new audit |
-| H-DISCLOSURE | Material claims are tested against onchain observation with a per-claim result | disclosure table with evidence ids per row | `rpc_state`, `receipt`, `website` (claims) | any admin action or disclosure change |
-| H-LIVE | The utility contract shows successful use within the stated window | receipts in window (count, range) | `receipt` | window expiry |
-| H-TOKEN-LINKED | The utility reads and moves the target contract, not a same-symbol or wrapped substitute | pointer read at P1 + `Transfer` emitted by the target in a use receipt | `rpc_state`, `log_decoded` | pointer setter call, upgrade |
-| H-DEP-LIVENESS | Each dependency's freshest functioning evidence and its age at P1 | last update/processing tx per dependency | `receipt`, `rpc_state` | staleness threshold elapsed |
-| H-RELEASE-CONTROLS | Deploy/upgrade/parameter authorities, thresholds and delays are resolved; upgrades were verified and disclosed | surface A reads + `Upgraded` history vs disclosures | `rpc_state`, `log_decoded` | ownership/role/delay change |
-| H-GOVERNANCE | Token votes bind the authorities that matter, or a multisig/guardian can act or veto without them | governor/timelock/role reads + execution history | `rpc_state`, `log_decoded` | role change, governor upgrade |
-| H-ADMIN-HISTORY | Admin actions from deployment to P1 are replayed, classified and matched to disclosures | event replay with coverage + receipts for setter calls | `log_decoded`, `receipt` | new admin action |
+| check_id | surface | Proposition tested | Minimum evidence | Preferred evidence type | Stale condition |
+|---|---|---|---|---|---|
+| H-UTILITY | utility_redemption_rights | Each advertised utility is live, linked to the target contract, and enforceable by code (or is a promise) | code at P1 + one use receipt moving the target token + path guard | `rpc_state`, `receipt`, `bytecode` | utility contract upgrade or token pointer change; window expiry for "live" |
+| H-DEPS | external_dependencies | Every material dependency is inventoried with failure mode, controller, upgradeability and liveness | one row per dependency with reads at P1 | `rpc_state`, `rpc_storage`, `receipt` | dependency admin action, feed change, keeper stop |
+| H-DEV | development_disclosure | Source correspondence, build/tests, audit scope, release controls, governance and disclosure accuracy are assessed against the deployed code and observed behavior | steps 3-9 rows | `bytecode`, `rpc_state`, `log_decoded`, `source_verified` | upgrade (new code hash), new admin actions |
+| H-SOURCE-CORRESPONDENCE | development_disclosure | Published source compiles to the runtime at P1 (per runtime, deduplicated by code hash) | metadata trailer decode + hash/byte comparison with listed exclusions | `bytecode`, `source_verified` | upgrade |
+| H-AUDIT-SCOPE | development_disclosure | Each audit's scope covers the deployed code hash and the contracts that matter, or the gap is stated | audit-named commit/hashes vs P1 code hashes | `bytecode`, `repository` (report, untrusted) | upgrade; new audit |
+| H-DISCLOSURE | development_disclosure | Material claims are tested against onchain observation with a per-claim result | disclosure table with evidence ids per row | `rpc_state`, `receipt`, `website` (claims) | any admin action or disclosure change |
+| H-LIVE | utility_redemption_rights | The utility contract shows successful use within the stated window | receipts in window (count, range) | `receipt` | window expiry |
+| H-TOKEN-LINKED | utility_redemption_rights | The utility reads and moves the target contract, not a same-symbol or wrapped substitute | pointer read at P1 + `Transfer` emitted by the target in a use receipt | `rpc_state`, `log_decoded` | pointer setter call, upgrade |
+| H-DEP-LIVENESS | external_dependencies | Each dependency's freshest functioning evidence and its age at P1 | last update/processing tx per dependency | `receipt`, `rpc_state` | staleness threshold elapsed |
+| H-RELEASE-CONTROLS | development_disclosure | Deploy/upgrade/parameter authorities, thresholds and delays are resolved; upgrades were verified and disclosed | surface A reads + `Upgraded` history vs disclosures | `rpc_state`, `log_decoded` | ownership/role/delay change |
+| H-GOVERNANCE | development_disclosure | Token votes bind the authorities that matter, or a multisig/guardian can act or veto without them | governor/timelock/role reads + execution history | `rpc_state`, `log_decoded` | role change, governor upgrade |
+| H-ADMIN-HISTORY | development_disclosure | Admin actions from deployment to P1 are replayed, classified and matched to disclosures | event replay with coverage + receipts for setter calls | `log_decoded`, `receipt` | new admin action |
 
 Statuses follow the manifest rules: `pass` and `finding` need evidence ids; `unknown`/`skipped` need a
 reason with the limitation id (`source_unavailable` when no compiler or record could be obtained).

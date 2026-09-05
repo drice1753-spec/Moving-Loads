@@ -1,5 +1,5 @@
 {
-  "_comment": "Target packet skeleton for evm-token-due-diligence. scripts/rpc_probe.py writes the machine-filled fields (tool, generated_at_utc, requested, observed, identity, pin, pinned_block_hex, runtime, metadata, probes, coverage_status, limitations, calls, failed_calls, declarations, notes). You fill deployment, candidate_pools, related_contracts, decision_question, requirement_frame, scope_statement, known_limitations, and _freeze. Keys starting with '_' are documentation: drop them, and drop keys the manifest schema does not allow (runtime.is_contract, runtime.proxy.implementation_code_size, metadata.*.selector, metadata.*.raw), when copying objects into a manifest. Chain ids and every other chain-specific number are as observed from the endpoint and must be verified at use time (eth_chainId at the pin).",
+  "_comment": "Target packet skeleton for evm-token-due-diligence. scripts/rpc_probe.py writes the machine-filled fields (tool, generated_at_utc, requested (chain_name and source stay null for you), observed, identity, cache, pin, pinned_block_hex, runtime, metadata (accounting_model stays null for you), probes, coverage_status, limitations, calls, failed_calls, declarations, notes). You fill deployment, candidate_pools, related_contracts, decision_question, requirement_frame, scope_statement, known_limitations, requested.chain_name/source, metadata.accounting_model, and _freeze. The target is always the TOKEN; a vault/pool/locker named by the user is resolved to its token first and enters related_contracts with its own role. Packet-to-manifest mapping (references/target-packet.md): drop keys starting with '_' and the schema-disallowed keys identity, cache, pinned_block_hex, probes, calls, failed_calls, coverage_status, observed.client_version_note, runtime.is_contract, runtime.runtime_status, runtime.proxy.implementation_code_size, metadata.*.selector, metadata.*.raw, metadata.*.qualifier, declarations.read_only_methods_only, notes, tool, packet_version; move requested.address_checksum -> target.address_checksum, runtime.runtime_status -> scope_addresses[0].runtime_status, pin -> pins[] (primary_pin_id P1), limitations -> coverage.limitations, related_contracts -> scope_addresses (after the target entry), raw metadata/probe return data -> evidence rows cited via metadata.*.evidence_id; add manifest_version \"1.0\", mode, declarations.simulation, declarations.external_content_untrusted, verdict (with conditional), report, and the target itself as scope_addresses[0] (role token, provenance user_supplied, runtime_status contract, code_hash = runtime.code_hash, material true). Chain ids and every other chain-specific number are as observed from the endpoint and must be verified at use time (eth_chainId at the pin).",
   "packet_version": "1.0",
   "tool": {
     "name": "rpc_probe.py",
@@ -9,7 +9,7 @@
   "generated_at_utc": null,
   "_comment_generated_at_utc": "UTC time the probe ran, YYYY-MM-DDTHH:MM:SSZ.",
   "requested": {
-    "_comment": "Exactly what the user asked for. chain_id (integer) is authoritative; chain_name is a label only. address is as supplied (strict: mixed case must satisfy EIP-55); address_checksum is the EIP-55 form used everywhere else. source = where the address came from (message, file, link).",
+    "_comment": "Exactly what the user asked for. chain_id (integer) is authoritative and is REQUIRED in this skill (--chain-id): a chain NAME from the user is mapped to the commonly cited id in references/chains/chain-verification.md section 6 and the mapping is recorded in source (e.g. \"user said 'Base'; mapped to commonly cited id 8453, confirmed by eth_chainId\"). chain_name is a label only. address is as supplied (strict: mixed case must satisfy EIP-55); address_checksum is the EIP-55 form used everywhere else (manifest: target.address_checksum). source = where the address came from (message, file, link) plus any chain-name mapping. The probe leaves chain_name and source null; you fill them.",
     "chain_id": null,
     "chain_name": null,
     "address": null,
@@ -17,19 +17,27 @@
     "source": null
   },
   "observed": {
-    "_comment": "What the endpoint reported. chain_id = int(eth_chainId), read live, never from cache. rpc_endpoint_redacted comes from ddcore.redact_url; never store the raw URL. client_version = web3_clientVersion when available (non-material).",
+    "_comment": "What the endpoint reported. chain_id = int(eth_chainId), read live, never from cache. rpc_endpoint_redacted comes from ddcore.redact_url; never store the raw URL. client_version = web3_clientVersion when available (non-material); client_version_note appears when it was unavailable (drop it for the manifest).",
     "chain_id": null,
     "rpc_chain_id_hex": null,
     "rpc_endpoint_redacted": null,
     "client_version": null
   },
   "identity": {
-    "_comment": "MATCH when requested.chain_id == observed.chain_id. CHAIN_MISMATCH means stop and report (rpc_probe exits 3 and reads nothing else). UNVERIFIED means the chain id could not be read (coverage limitation; nothing can be pinned). pin_warning appears when the block hash looks like a placeholder.",
+    "_comment": "status: MATCH when requested.chain_id == observed.chain_id (continue). OBSERVED_ONLY when no --chain-id was given and the observed chain was adopted: confirm the intended chain with the user, re-run with --chain-id N, and require MATCH before Step 2; never freeze in this state. CHAIN_MISMATCH means stop and report (rpc_probe exits 3 and reads nothing else); it is recorded HERE as an identity failure, never as a coverage limitation. UNVERIFIED means the chain id could not be read (exit 1; coverage limitation; nothing can be pinned). requested/observed repeat the two chain ids for the record. pin_warning appears when the block hash looks like a placeholder.",
     "status": "UNVERIFIED",
+    "requested": null,
+    "observed": null,
     "detail": null
   },
+  "cache": {
+    "_comment": "Binding of the --cache file to the live chain id: status none (no --cache), used, or ignored (the file was recorded for another chain and nothing was read from or written to it; note carries the reason). ddcore.ResponseCache keys entries on [chain_id, scheme, host, port, redacted path, method, params]; floating block tags are never cached; the chain id itself is always read live.",
+    "status": "none",
+    "chain_id": null,
+    "note": null
+  },
   "pin": {
-    "_comment": "Primary pin P1 in manifest pin format. block_number, block_hash and timestamp_unix are copied from captured_header, the raw eth_getBlockByNumber result. Every later read uses pinned_block_hex, never 'latest'. Additional chains and historical snapshots get P2..Pn in the manifest, never a replaced P1.",
+    "_comment": "Primary pin P1 in manifest pin format. block_number, block_hash and timestamp_unix are copied from captured_header, the raw eth_getBlockByNumber result. Pin with --block finalized where the endpoint supports the tag, else latest, and say which in purpose. Every later read - and every later rpc_probe.py run against another contract - uses pinned_block_hex / --block <block_number>, never 'latest'. Additional chains and historical snapshots get P2..Pn in the manifest, never a replaced P1.",
     "pin_id": "P1",
     "chain_id": null,
     "block_number": null,
@@ -45,9 +53,10 @@
   "pinned_block_hex": null,
   "_comment_pinned_block_hex": "Hex block number (0x..) passed to every pinned read.",
   "runtime": {
-    "_comment": "Target runtime at P1. code_hash = keccak256(eth_getCode) (0x + 64 hex); is_contract false with the empty-code hash means the address has no code. proxy.status: not_proxy | eip1967 | eip1822 | beacon | minimal_1167 | custom | unknown. slots_read maps slot -> raw 32-byte value. upgrade_authority stays null until resolved under A-UPGRADE (address + role + threshold/timelock).",
+    "_comment": "Target runtime at P1. code_hash = keccak256(eth_getCode) (0x + 64 hex). runtime_status: contract | eoa (no code at the pin: the empty-code hash, is_contract false; metadata and probes are then qualified) | unknown (eth_getCode failed or returned a non-string: a limitation is recorded and coverage_status is partial - never 'not a contract'). proxy.status: not_proxy | eip1967 | eip1822 | beacon | minimal_1167 | custom | unknown (unknown whenever a slot read failed, with a limitation; never not_proxy in that case). slots_read maps slot -> raw 32-byte value. upgrade_authority stays null until resolved under A-UPGRADE (address + role + threshold/timelock). Manifest: runtime_status goes to scope_addresses[0].runtime_status; is_contract and implementation_code_size are dropped.",
     "code_hash": null,
     "code_size": null,
+    "runtime_status": "unknown",
     "is_contract": null,
     "pin_id": "P1",
     "proxy": {
@@ -63,14 +72,15 @@
     }
   },
   "metadata": {
-    "_comment": "Resolved from the target with eth_call at P1. status: resolved | nonstandard (value kept, decoding basis in reason) | unresolved (value null, reason required). source names the call and pin; selector and raw preserve the request and raw return data (move raw into an evidence row and cite it via evidence_id when building the manifest). accounting_model is yours to fill from code and behavior: standard_erc20 | rebasing | fee_on_transfer | shares_based | wrapper | unknown.",
+    "_comment": "Resolved from the target with eth_call at P1. status: resolved | nonstandard (value kept, decoding basis in reason) | unresolved (value null, reason required; an empty string or control characters are unresolved). source names the call and pin; selector and raw preserve the request and raw return data (move raw into an evidence row and cite it via evidence_id when building the manifest). qualifier is null for a contract; for an eoa target every field is unresolved with the qualifier 'no runtime code at this address at the pin; return data cannot come from this address' (goes into reason in the manifest). accounting_model is yours to fill from code and behavior: standard_erc20 | rebasing | fee_on_transfer | shares_based | wrapper | unknown.",
     "name": {
       "value": null,
       "status": "unresolved",
       "source": "eth_call name() (0x06fdde03) at P1",
       "reason": null,
       "selector": "0x06fdde03",
-      "raw": null
+      "raw": null,
+      "qualifier": null
     },
     "symbol": {
       "value": null,
@@ -78,7 +88,8 @@
       "source": "eth_call symbol() (0x95d89b41) at P1",
       "reason": null,
       "selector": "0x95d89b41",
-      "raw": null
+      "raw": null,
+      "qualifier": null
     },
     "decimals": {
       "value": null,
@@ -86,7 +97,8 @@
       "source": "eth_call decimals() (0x313ce567) at P1",
       "reason": null,
       "selector": "0x313ce567",
-      "raw": null
+      "raw": null,
+      "qualifier": null
     },
     "total_supply": {
       "value": null,
@@ -94,12 +106,13 @@
       "source": "eth_call totalSupply() (0x18160ddd) at P1",
       "reason": null,
       "selector": "0x18160ddd",
-      "raw": null
+      "raw": null,
+      "qualifier": null
     },
     "accounting_model": null
   },
   "probes": [],
-  "_comment_probes": "Standard probes owner(), getOwner(), paused() plus each --call (a --call repeating a standard probe is read once). Element shape in _element_shapes.probe. status: ok | reverted | unavailable | empty. A revert is a fact about the contract at P1, not a limitation; unavailable means the read failed and a limitation was recorded.",
+  "_comment_probes": "Standard probes owner(), getOwner(), paused() plus each --call (a --call repeating a standard probe is read once). Element shape in _element_shapes.probe. status: ok | reverted | unavailable | empty. A revert is a fact about the contract at P1, not a limitation (recorded in failed_calls with outcome reverted); unavailable means the read failed and a limitation was recorded. For an eoa target every probe carries the qualifier and an ok/reverted result is marked INCONSISTENT in detail.",
   "deployment": {
     "_comment": "Not derivable from standard JSON-RPC reads. Discover via explorer/trace tooling, then verify by receipt (contractAddress == target) and record provenance; until then status stays unresolved with the reason. deterministic = true when created via CREATE2/factory with a derivable address.",
     "status": "unresolved",
@@ -113,20 +126,20 @@
   "candidate_pools": [],
   "_comment_candidate_pools": "Pools from the architecture pass, each by exact address (v2/v3) or full pool key + derived PoolId (v4). Element shape in _element_shapes.candidate_pool. Canonical vs side is decided under B-CANON/B-SIDE, not here.",
   "related_contracts": [],
-  "_comment_related_contracts": "Every contract or key that can change balances, restrict transfers, remove principal, upgrade behavior, collect fees, allocate rewards, or enforce claimed utility. Element shape = manifest scope_addresses entry (see _element_shapes.related_contract) so it can be copied unchanged.",
+  "_comment_related_contracts": "Every contract or key that can change balances, restrict transfers, remove principal, upgrade behavior (token AND reward/vault/distributor layer: G-LAYER-ADMIN), collect fees, allocate rewards, or enforce claimed utility; in focused mode only the asked question's dependencies (record the rest as an out_of_scope known limitation). Element shape = manifest scope_addresses entry (see _element_shapes.related_contract) so it can be copied unchanged after the target's own entry. Every address that will be named in the report needs an entry with a neutral role.",
   "decision_question": null,
   "_comment_decision_question": "The user's actual question, verbatim.",
   "requirement_frame": null,
-  "_comment_requirement_frame": "The standard the verdict is judged against, e.g. 'rug resistance for a 30-day hold' or 'exit of 0.5% of supply within 5% degradation'.",
+  "_comment_requirement_frame": "The standard the verdict is judged against, e.g. 'rug resistance for a 30-day hold' or 'exit of 0.5% of supply within 5% degradation'. When the user gave none: 'rug resistance and exit at the stated size over a 30-day hold', labeled an assumption in the verdict.",
   "scope_statement": null,
   "_comment_scope_statement": "What is in and out of scope (chains, pools, reward layers, time bounds).",
   "materiality_rules": "Monetary thresholds never apply to discovery of mint, upgrade, seizure, transfer-restriction, arbitrary-call, or LP-removal authority.",
   "known_limitations": [],
-  "_comment_known_limitations": "Free-text limitations known before starting (no archive endpoint, no explorer API, no parallel agents).",
+  "_comment_known_limitations": "Free-text limitations known before starting (no archive endpoint, no explorer API, no parallel agents, focused run: authority surfaces not enumerated).",
   "coverage_status": "partial",
   "_comment_coverage_status": "complete when limitations is empty, otherwise partial.",
   "limitations": [],
-  "_comment_limitations": "Manifest-shaped coverage limitations L1..Ln (see _element_shapes.limitation). Never token findings.",
+  "_comment_limitations": "Manifest-shaped coverage limitations L1..Ln (see _element_shapes.limitation). Never token findings; a chain mismatch is never recorded here (it lives under identity).",
   "calls": [],
   "_comment_calls": "Every successful RPC call {method, params, cached} for replay.",
   "failed_calls": [],
@@ -139,7 +152,7 @@
   },
   "notes": [],
   "_freeze": {
-    "_comment": "Filled when the packet is frozen: sha256 of this file computed with the three values below set to null; frozen_at_utc; frozen_by (agent/session label, no personal data). After freezing, the packet is read-only; a new target or pin means a new packet.",
+    "_comment": "Filled when the packet is frozen. sha256 = sha256 of this packet's JSON serialized with sort_keys=True, separators=(',', ':') after setting EVERY value in this _freeze object to null (one-liner in references/target-packet.md and SKILL.md Step 1); frozen_at_utc; frozen_by (agent/session label, no personal data). Lanes verify by recomputing. After freezing, the packet is read-only; a new target or pin means a new packet.",
     "sha256": null,
     "frozen_at_utc": null,
     "frozen_by": null
@@ -157,7 +170,8 @@
         "string": null
       },
       "status": null,
-      "detail": null
+      "detail": null,
+      "qualifier": null
     },
     "candidate_pool": {
       "platform": "uniswap_v2 | uniswap_v3 | uniswap_v4 | curve_launchpad | other",
