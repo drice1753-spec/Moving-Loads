@@ -1,0 +1,43 @@
+{
+  "expect": "fail",
+  "expected_codes": [
+    "E-REPORT-IDENTITY",
+    "E-REPORT-TARGET-ABSENT"
+  ],
+  "forbidden_codes": [
+    "E-SCHEMA",
+    "E-ADDR-MALFORMED",
+    "E-ADDR-CHECKSUM",
+    "E-CHAIN-MISMATCH",
+    "E-CHAIN-UNPINNED",
+    "E-PIN-PLACEHOLDER",
+    "E-PIN-HEADER-MISMATCH",
+    "E-PIN-TIME",
+    "E-PIN-PRIMARY",
+    "E-META-STATUS",
+    "E-META-REPORT",
+    "E-SCOPE-TARGET",
+    "E-SCOPE-RUNTIME",
+    "E-SCOPE-ADDRESS",
+    "E-REPORT-MISSING",
+    "E-REPORT-HASH",
+    "E-REPORT-SECTIONS",
+    "E-REPORT-RATINGS",
+    "E-REPORT-VERDICT",
+    "E-CHECK-CORE-MISSING",
+    "E-CHECK-STATUS",
+    "E-CHECK-DISCOVERY-ONLY",
+    "E-EVIDENCE-DANGLING",
+    "E-FINDING-NO-EVIDENCE",
+    "E-FINDING-UNLINKED",
+    "E-FINDING-CHAIN",
+    "E-FINDING-EVIDENCE-TYPE",
+    "E-RATING-MISSING",
+    "E-RATING-UNKNOWN-AS-LOW",
+    "E-RATING-CRITICAL-AVERAGED",
+    "E-DECL-SIGNING",
+    "E-DECL-FORK",
+    "E-MODE-MISMATCH"
+  ],
+  "notes": "Report frontmatter and body refer to a different address; the manifest target never appears in the body. W-REPORT-UNSCOPED-ADDRESS is expected as a warning."
+}

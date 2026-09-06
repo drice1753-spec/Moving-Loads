@@ -1,0 +1,355 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "evm-token-due-diligence/manifest.schema.json",
+  "title": "EVM token due-diligence target-integrity manifest",
+  "description": "Machine-checkable record binding a diligence run to one exact chain + contract address, its block pins, scope addresses, checks, evidence, findings, ratings and declarations. Validated by scripts/validate_report.py. Passing validation proves internal consistency only, not RPC honesty, discovery completeness, or protocol safety.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_version", "mode", "target", "pins", "primary_pin_id", "scope_addresses", "declarations", "coverage", "checks", "evidence", "findings", "verdict", "report"],
+  "properties": {
+    "manifest_version": {"type": "string", "const": "1.0"},
+    "mode": {"type": "string", "enum": ["focused", "broad", "formal"]},
+    "generated_at_utc": {"$ref": "#/definitions/utc"},
+    "tooling": {
+      "type": "object",
+      "description": "Free-form record of tool versions used (redact credentials).",
+      "additionalProperties": true
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "observed", "address_checksum", "metadata", "runtime", "deployment", "decision_question", "scope_statement", "materiality_rules"],
+      "properties": {
+        "requested": {
+          "type": "object", "additionalProperties": false,
+          "required": ["chain_id", "address"],
+          "properties": {
+            "chain_id": {"$ref": "#/definitions/chainId"},
+            "chain_name": {"type": ["string", "null"], "description": "Label only; chain_id is authoritative."},
+            "address": {"$ref": "#/definitions/address"},
+            "source": {"type": "string", "description": "Where the user supplied the address (message, file, link)."}
+          }
+        },
+        "observed": {
+          "type": "object", "additionalProperties": false,
+          "required": ["chain_id", "rpc_chain_id_hex", "rpc_endpoint_redacted"],
+          "properties": {
+            "chain_id": {"$ref": "#/definitions/chainId", "description": "int(eth_chainId) from the RPC actually queried."},
+            "rpc_chain_id_hex": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+            "rpc_endpoint_redacted": {"type": "string"},
+            "client_version": {"type": ["string", "null"]}
+          }
+        },
+        "address_checksum": {"$ref": "#/definitions/address", "description": "EIP-55 form of requested.address."},
+        "metadata": {
+          "type": "object", "additionalProperties": false,
+          "required": ["name", "symbol", "decimals", "total_supply"],
+          "properties": {
+            "name": {"$ref": "#/definitions/metaField"},
+            "symbol": {"$ref": "#/definitions/metaField"},
+            "decimals": {"$ref": "#/definitions/metaField"},
+            "total_supply": {"$ref": "#/definitions/metaField"},
+            "accounting_model": {"type": ["string", "null"], "description": "e.g. standard_erc20, rebasing, fee_on_transfer, shares_based, wrapper, unknown"}
+          }
+        },
+        "runtime": {
+          "type": "object", "additionalProperties": false,
+          "required": ["code_hash", "code_size", "pin_id", "proxy"],
+          "properties": {
+            "code_hash": {"$ref": "#/definitions/hash32"},
+            "code_size": {"type": "integer", "minimum": 0},
+            "pin_id": {"type": "string"},
+            "proxy": {
+              "type": "object", "additionalProperties": false,
+              "required": ["status"],
+              "properties": {
+                "status": {"type": "string", "enum": ["not_proxy", "eip1967", "eip1822", "beacon", "minimal_1167", "custom", "unknown"]},
+                "implementation": {"$ref": "#/definitions/addressOrNull"},
+                "implementation_code_hash": {"$ref": "#/definitions/hash32OrNull"},
+                "admin": {"$ref": "#/definitions/addressOrNull"},
+                "beacon": {"$ref": "#/definitions/addressOrNull"},
+                "upgrade_authority": {"type": ["string", "null"], "description": "Who can change implementation, as resolved (address + role + threshold/timelock)."},
+                "slots_read": {"type": "object", "additionalProperties": {"type": "string"}, "description": "slot -> raw value at pin"},
+                "basis": {"type": ["string", "null"]}
+              }
+            }
+          }
+        },
+        "deployment": {
+          "type": "object", "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": {"type": "string", "enum": ["resolved", "unresolved"]},
+            "tx_hash": {"$ref": "#/definitions/hash32OrNull"},
+            "block_number": {"type": ["integer", "null"]},
+            "deployer": {"$ref": "#/definitions/addressOrNull"},
+            "factory": {"$ref": "#/definitions/addressOrNull"},
+            "deterministic": {"type": ["boolean", "null"]},
+            "reason": {"type": ["string", "null"]}
+          }
+        },
+        "decision_question": {"type": "string", "minLength": 1},
+        "requirement_frame": {"type": ["string", "null"], "description": "The standard the verdict is judged against, e.g. 'rug resistance for a 30-day hold'."},
+        "scope_statement": {"type": "string", "minLength": 1},
+        "materiality_rules": {"type": "string", "minLength": 1, "description": "Monetary thresholds never apply to mint/upgrade/seizure/restriction/arbitrary-call/LP-removal authority discovery."},
+        "known_limitations": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "pins": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["pin_id", "chain_id", "block_number", "block_hash", "timestamp_unix", "timestamp_utc", "captured_at_utc", "rpc_method", "captured_header"],
+        "properties": {
+          "pin_id": {"type": "string", "pattern": "^P[0-9]+$"},
+          "chain_id": {"$ref": "#/definitions/chainId"},
+          "block_number": {"type": "integer", "minimum": 1},
+          "block_hash": {"$ref": "#/definitions/hash32"},
+          "timestamp_unix": {"type": "integer", "minimum": 1},
+          "timestamp_utc": {"$ref": "#/definitions/utc"},
+          "captured_at_utc": {"$ref": "#/definitions/utc"},
+          "rpc_method": {"type": "string", "enum": ["eth_getBlockByNumber", "eth_getBlockByHash"]},
+          "rpc_endpoint_redacted": {"type": ["string", "null"]},
+          "captured_header": {
+            "type": "object",
+            "required": ["number", "hash", "parentHash", "timestamp"],
+            "properties": {
+              "number": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"},
+              "hash": {"$ref": "#/definitions/hash32"},
+              "parentHash": {"$ref": "#/definitions/hash32"},
+              "timestamp": {"type": "string", "pattern": "^0x[0-9a-fA-F]+$"}
+            },
+            "additionalProperties": true
+          },
+          "purpose": {"type": ["string", "null"], "description": "current_state | historical | secondary_chain"}
+        }
+      }
+    },
+    "primary_pin_id": {"type": "string", "pattern": "^P[0-9]+$"},
+    "scope_addresses": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["address", "chain_id", "role", "provenance", "runtime_status", "code_hash", "pin_id", "material"],
+        "properties": {
+          "address": {"$ref": "#/definitions/address"},
+          "chain_id": {"$ref": "#/definitions/chainId"},
+          "role": {"type": "string", "enum": ["token", "implementation", "proxy_admin", "beacon", "owner", "role_holder", "multisig", "timelock", "pool", "pool_manager", "position_manager", "position_nft", "locker", "hook", "router", "quoter", "factory", "launch_platform", "curve", "treasury", "fee_recipient", "vault", "reward_distributor", "bridge", "oracle", "deployer", "launch_signer", "funder", "holder", "burn", "exchange_deposit", "other"]},
+          "label": {"type": ["string", "null"]},
+          "provenance": {"type": "string", "enum": ["user_supplied", "rpc_derived", "event_derived", "explorer_label", "website_claim", "inferred"]},
+          "provenance_detail": {"type": ["string", "null"]},
+          "runtime_status": {"type": "string", "enum": ["contract", "eoa", "unknown"]},
+          "code_hash": {"$ref": "#/definitions/hash32OrNull"},
+          "pin_id": {"type": "string", "pattern": "^P[0-9]+$"},
+          "material": {"type": "boolean"},
+          "limitation_id": {"type": ["string", "null"], "description": "Required when material and runtime_status is unknown."}
+        }
+      }
+    },
+    "declarations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["no_real_signing", "no_broadcast", "no_private_keys_requested", "simulation"],
+      "properties": {
+        "no_real_signing": {"type": "boolean"},
+        "no_broadcast": {"type": "boolean"},
+        "no_private_keys_requested": {"type": "boolean"},
+        "external_content_untrusted": {"type": "boolean"},
+        "simulation": {
+          "type": "object", "additionalProperties": false,
+          "required": ["used"],
+          "properties": {
+            "used": {"type": "boolean"},
+            "fork_type": {"type": ["string", "null"]},
+            "fork_verified_disposable": {"type": ["boolean", "null"]},
+            "fork_attestation_path": {"type": ["string", "null"]},
+            "fork_chain_id": {"type": ["integer", "null"]},
+            "fork_block": {"type": ["integer", "null"]},
+            "synthetic_accounts_only": {"type": ["boolean", "null"]},
+            "results_labeled_counterfactual": {"type": ["boolean", "null"]}
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["limitations"],
+      "properties": {
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["limitation_id", "kind", "description"],
+            "properties": {
+              "limitation_id": {"type": "string", "pattern": "^L[0-9]+$"},
+              "kind": {"type": "string", "enum": ["rpc_timeout", "rpc_rate_limit", "rpc_pruned", "rpc_error", "dns_failure", "api_unavailable", "explorer_unavailable", "source_unavailable", "out_of_scope", "other"]},
+              "description": {"type": "string", "minLength": 1},
+              "affected_check_ids": {"type": "array", "items": {"type": "string"}},
+              "affected_addresses": {"type": "array", "items": {"$ref": "#/definitions/address"}},
+              "retry_attempts": {"type": ["integer", "null"]}
+            }
+          }
+        },
+        "notes": {"type": ["string", "null"]}
+      }
+    },
+    "discovery": {
+      "type": "array",
+      "description": "Search-universe declarations for discovery claims (pools, holders, cohorts).",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["discovery_id", "claim", "search_universe", "inclusion_rule", "coverage"],
+        "properties": {
+          "discovery_id": {"type": "string", "pattern": "^S[0-9]+$"},
+          "claim": {"type": "string"},
+          "search_universe": {"type": "string"},
+          "block_range": {"type": ["string", "null"]},
+          "pagination": {"type": ["string", "null"]},
+          "inclusion_rule": {"type": "string"},
+          "exclusions": {"type": ["string", "null"]},
+          "materiality_threshold": {"type": ["string", "null"]},
+          "coverage": {"type": "string"}
+        }
+      }
+    },
+    "checks": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["check_id", "surface", "name", "status", "severity", "evidence_ids", "finding_ids", "reason", "pin_id"],
+        "properties": {
+          "check_id": {"type": "string", "pattern": "^[A-HT]-[A-Z0-9-]+$"},
+          "surface": {"$ref": "#/definitions/surface"},
+          "name": {"type": "string"},
+          "status": {"type": "string", "enum": ["pass", "finding", "unknown", "skipped", "not_applicable"]},
+          "severity": {"type": ["string", "null"], "enum": ["critical", "high", "medium", "low", "info", null]},
+          "evidence_ids": {"type": "array", "items": {"type": "string", "pattern": "^E[0-9]+$"}},
+          "finding_ids": {"type": "array", "items": {"type": "string", "pattern": "^F[0-9]+$"}},
+          "reason": {"type": ["string", "null"]},
+          "pin_id": {"type": ["string", "null"]},
+          "limitation_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["evidence_id", "chain_id", "evidence_type", "artifact", "query", "decoding_basis"],
+        "properties": {
+          "evidence_id": {"type": "string", "pattern": "^E[0-9]+$"},
+          "chain_id": {"$ref": "#/definitions/chainId"},
+          "address": {"$ref": "#/definitions/addressOrNull"},
+          "pin_id": {"type": ["string", "null"]},
+          "tx_hash": {"$ref": "#/definitions/hash32OrNull"},
+          "block_number": {"type": ["integer", "null"]},
+          "evidence_type": {"$ref": "#/definitions/evidenceType"},
+          "artifact": {"type": "string", "description": "Path to preserved raw artifact, or 'inline'."},
+          "artifact_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$|^$"},
+          "query": {"type": ["object", "string"], "description": "Reproducible query parameters with credentials redacted."},
+          "decoding_basis": {"type": "string", "description": "ABI/selector/event signature/source used to decode; 'raw' if none."},
+          "summary": {"type": ["string", "null"]},
+          "counterfactual": {"type": ["boolean", "null"], "description": "Must be true for simulation_counterfactual evidence."}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["finding_id", "proposition", "chain_id", "address", "pin_or_tx", "evidence_ids", "evidence_type", "confidence", "alternatives", "coverage", "stale_conditions", "severity", "surface"],
+        "properties": {
+          "finding_id": {"type": "string", "pattern": "^F[0-9]+$"},
+          "proposition": {"type": "string", "minLength": 1},
+          "surface": {"$ref": "#/definitions/surface"},
+          "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
+          "chain_id": {"$ref": "#/definitions/chainId"},
+          "address": {"$ref": "#/definitions/addressOrNull"},
+          "pin_or_tx": {"type": "string", "description": "A pin_id (current state) or a tx hash (historical execution)."},
+          "evidence_ids": {"type": "array", "minItems": 0, "items": {"type": "string", "pattern": "^E[0-9]+$"}},
+          "evidence_type": {"$ref": "#/definitions/evidenceType"},
+          "confidence": {"type": "string", "enum": ["proven", "strongly_supported", "inference", "unknown"]},
+          "alternatives": {"type": "string"},
+          "coverage": {"type": "string"},
+          "stale_conditions": {"type": "string"},
+          "is_historical": {"type": ["boolean", "null"]}
+        }
+      }
+    },
+    "ratings": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "token_controls": {"$ref": "#/definitions/rating"},
+        "canonical_lp_principal_custody": {"$ref": "#/definitions/rating"},
+        "side_pool_removal_risk": {"$ref": "#/definitions/rating"},
+        "sellability_exit_depth": {"$ref": "#/definitions/rating"},
+        "current_concentration": {"$ref": "#/definitions/rating"},
+        "historical_launch_integrity": {"$ref": "#/definitions/rating"},
+        "admin_treasury_reward_custody": {"$ref": "#/definitions/rating"},
+        "reward_accounting_liveness": {"$ref": "#/definitions/rating"},
+        "utility_redemption_rights": {"$ref": "#/definitions/rating"},
+        "external_dependencies": {"$ref": "#/definitions/rating"},
+        "development_disclosure": {"$ref": "#/definitions/rating"}
+      }
+    },
+    "verdict": {
+      "type": "object", "additionalProperties": false,
+      "required": ["question", "answer", "conditional", "conditions"],
+      "properties": {
+        "question": {"type": "string", "minLength": 1},
+        "requirement_frame": {"type": ["string", "null"]},
+        "answer": {"type": "string", "minLength": 1},
+        "conditional": {"type": "boolean"},
+        "conditions": {"type": "array", "items": {"type": "string"}},
+        "main_reasons": {"type": "array", "items": {"type": "string"}},
+        "strongest_contrary_evidence": {"type": "array", "items": {"type": "string"}},
+        "unresolved_questions": {"type": "array", "items": {"type": "string"}},
+        "evidence_that_would_change_it": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "description": "Relative to the manifest file."},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "format": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "definitions": {
+    "chainId": {"type": "integer", "minimum": 1},
+    "address": {"type": "string", "pattern": "^0x[0-9a-fA-F]{40}$"},
+    "addressOrNull": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]{40}$"},
+    "hash32": {"type": "string", "pattern": "^0x[0-9a-fA-F]{64}$"},
+    "hash32OrNull": {"type": ["string", "null"], "pattern": "^0x[0-9a-fA-F]{64}$"},
+    "utc": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "surface": {"type": "string", "enum": ["token_controls", "canonical_lp_principal_custody", "side_pool_removal_risk", "sellability_exit_depth", "current_concentration", "historical_launch_integrity", "admin_treasury_reward_custody", "reward_accounting_liveness", "utility_redemption_rights", "external_dependencies", "development_disclosure"]},
+    "evidenceType": {"type": "string", "enum": ["rpc_state", "rpc_storage", "bytecode", "calldata", "receipt", "log_decoded", "trace", "source_verified", "source_unverified", "explorer", "dashboard", "website", "repository", "token_metadata", "simulation_counterfactual", "manual_note"]},
+    "metaField": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "status", "source"],
+      "properties": {
+        "value": {"type": ["string", "integer", "null"]},
+        "status": {"type": "string", "enum": ["resolved", "unresolved", "nonstandard"]},
+        "source": {"type": "string", "description": "e.g. eth_call symbol() at P1; raw return data preserved in evidence E3"},
+        "reason": {"type": ["string", "null"]},
+        "evidence_id": {"type": ["string", "null"]}
+      }
+    },
+    "rating": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rating", "likelihood", "confidence", "coverage", "time_basis_pin_id", "basis_check_ids", "summary"],
+      "properties": {
+        "rating": {"type": "string", "enum": ["critical", "high", "medium", "low", "unknown", "not_applicable"]},
+        "likelihood": {"type": "string", "enum": ["high", "medium", "low", "unknown"]},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "coverage": {"type": "string", "enum": ["full", "partial", "none"]},
+        "time_basis_pin_id": {"type": ["string", "null"]},
+        "basis_check_ids": {"type": "array", "items": {"type": "string"}},
+        "summary": {"type": "string"},
+        "coverage_qualified": {"type": ["boolean", "null"]},
+        "coverage_note": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,1213 @@
+{
+  "manifest_version": "1.0",
+  "mode": "broad",
+  "generated_at_utc": "2025-01-01T00:10:00Z",
+  "tooling": {
+    "generator": "tests/fixtures/make_fixtures.py",
+    "note": "SYNTHETIC FIXTURE - not a live finding"
+  },
+  "target": {
+    "requested": {
+      "chain_id": 8453,
+      "chain_name": "fixture-chain (label only; chain_id authoritative)",
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "source": "fixture generator"
+    },
+    "observed": {
+      "chain_id": 8453,
+      "rpc_chain_id_hex": "0x2105",
+      "rpc_endpoint_redacted": "https://rpc.example.invalid/<redacted>",
+      "client_version": "synthetic/0.0"
+    },
+    "address_checksum": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+    "metadata": {
+      "name": {
+        "value": "Synthetic Token",
+        "status": "resolved",
+        "source": "eth_call at P1; raw return preserved in E1",
+        "reason": null,
+        "evidence_id": "E1"
+      },
+      "symbol": {
+        "value": "SYNTH",
+        "status": "resolved",
+        "source": "eth_call at P1; raw return preserved in E1",
+        "reason": null,
+        "evidence_id": "E1"
+      },
+      "decimals": {
+        "value": 18,
+        "status": "resolved",
+        "source": "eth_call at P1; raw return preserved in E1",
+        "reason": null,
+        "evidence_id": "E1"
+      },
+      "total_supply": {
+        "value": "1000000000000000000000000000",
+        "status": "resolved",
+        "source": "eth_call at P1; raw return preserved in E1",
+        "reason": null,
+        "evidence_id": "E1"
+      },
+      "accounting_model": "standard_erc20"
+    },
+    "runtime": {
+      "code_hash": "0x2695c1299ec1011eadc3ebb3f4fa4d32c08ac60d601eeac257ac6d373bc53fb7",
+      "code_size": 4321,
+      "pin_id": "P1",
+      "proxy": {
+        "status": "not_proxy",
+        "implementation": null,
+        "implementation_code_hash": null,
+        "admin": null,
+        "beacon": null,
+        "upgrade_authority": null,
+        "slots_read": {
+          "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "basis": "EIP-1967 slots zero at P1 and no DELEGATECALL opcode in runtime (E2, E4)"
+      }
+    },
+    "deployment": {
+      "status": "resolved",
+      "tx_hash": "0x98e81c747ce3f7facaddee935329d5f99d7409507b506c6abf8d9e5cde7fbf9f",
+      "block_number": 19000000,
+      "deployer": "0xbb81ec74428A54fAEd3b863AAfcbE883f6b4f01a",
+      "factory": null,
+      "deterministic": false,
+      "reason": null
+    },
+    "decision_question": "Under a rug-resistance requirement for a 30-day hold, is this token acceptable?",
+    "requirement_frame": "rug resistance for a 30-day hold",
+    "scope_statement": "Token contract, its owner, the canonical v3 pool and position, the locker, treasury and launch-era transfers on the target chain.",
+    "materiality_rules": "No monetary threshold applies to mint/upgrade/seizure/restriction/arbitrary-call/LP-removal authority. Holder balances below 0.5% of supply are not individually classified.",
+    "known_limitations": [
+      "Historical receipts before the pruning horizon of the queried RPC were unavailable (L1)."
+    ]
+  },
+  "pins": [
+    {
+      "pin_id": "P1",
+      "chain_id": 8453,
+      "block_number": 20000000,
+      "block_hash": "0x3accacbb3a5f108d99c4a7c58cd2347ec1fec384895349c1a9094d9a0cd6b8a8",
+      "timestamp_unix": 1735689600,
+      "timestamp_utc": "2025-01-01T00:00:00Z",
+      "captured_at_utc": "2025-01-01T00:10:00Z",
+      "rpc_method": "eth_getBlockByNumber",
+      "rpc_endpoint_redacted": "https://rpc.example.invalid/<redacted>",
+      "captured_header": {
+        "number": "0x1312d00",
+        "hash": "0x3accacbb3a5f108d99c4a7c58cd2347ec1fec384895349c1a9094d9a0cd6b8a8",
+        "parentHash": "0xd1baac015fa4184cba2411f42f5e6b0c40c8813d564049a965667d2d3489cd12",
+        "timestamp": "0x67748580",
+        "stateRoot": "0x55bd87bbff4f17bca3f1d44c65bcd9c61adf3acc3ed2afe8eb55237c422f0bca"
+      },
+      "purpose": "current_state"
+    },
+    {
+      "pin_id": "P2",
+      "chain_id": 8453,
+      "block_number": 19000000,
+      "block_hash": "0x787eceff8e1b40587db5a3a0deff67d938eaa51810502204ae8a4eb09c85e044",
+      "timestamp_unix": 1735603200,
+      "timestamp_utc": "2024-12-31T00:00:00Z",
+      "captured_at_utc": "2025-01-01T00:10:00Z",
+      "rpc_method": "eth_getBlockByNumber",
+      "rpc_endpoint_redacted": "https://rpc.example.invalid/<redacted>",
+      "captured_header": {
+        "number": "0x121eac0",
+        "hash": "0x787eceff8e1b40587db5a3a0deff67d938eaa51810502204ae8a4eb09c85e044",
+        "parentHash": "0x8979fb61fbdc983d8a782b0e22eaa82d8044f50801d73453233da36a59d711ef",
+        "timestamp": "0x67733400",
+        "stateRoot": "0x6bdcb9bc774a4cee46851b22975862bb714eb69a158ca93f3f515af202a3c4dd"
+      },
+      "purpose": "historical"
+    }
+  ],
+  "primary_pin_id": "P1",
+  "scope_addresses": [
+    {
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "chain_id": 8453,
+      "role": "token",
+      "label": "target token",
+      "provenance": "user_supplied",
+      "provenance_detail": null,
+      "runtime_status": "contract",
+      "code_hash": "0x2695c1299ec1011eadc3ebb3f4fa4d32c08ac60d601eeac257ac6d373bc53fb7",
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0xc321C6851A7095A8095F0b2D7cE6FD919986BE5d",
+      "chain_id": 8453,
+      "role": "owner",
+      "label": "owner() at P1",
+      "provenance": "rpc_derived",
+      "provenance_detail": "eth_call owner() E3",
+      "runtime_status": "eoa",
+      "code_hash": null,
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0x1345BD9a6C8A034Ed78BaFF7732fF6C315354D00",
+      "chain_id": 8453,
+      "role": "pool",
+      "label": "canonical v3 pool",
+      "provenance": "event_derived",
+      "provenance_detail": "PoolCreated log E9",
+      "runtime_status": "contract",
+      "code_hash": "0x314d32cedc25a0bdcc6ce37b47113ad7cf474026fee3c3644f7831e31d70e666",
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0xA7D2bCB329bF01DC85092FE1cc9cA6BC871e7847",
+      "chain_id": 8453,
+      "role": "position_manager",
+      "label": "v3 position manager",
+      "provenance": "rpc_derived",
+      "provenance_detail": null,
+      "runtime_status": "contract",
+      "code_hash": "0x31fb655fa80145f7620420b34cdfce14d9a7d95cacd5a83e460f921f535d62bb",
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0x0063c7FCC46d3436e831664c35F79EA0787FD851",
+      "chain_id": 8453,
+      "role": "locker",
+      "label": "position NFT holder (locker)",
+      "provenance": "event_derived",
+      "provenance_detail": "ownerOf E7",
+      "runtime_status": "contract",
+      "code_hash": "0x3e4b5ea15ae27ed9285f358bd0df75fd0beef86ae103dbc49038fe4411f954c5",
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0x8364a8EAf255c80AaDeE6BeEC228380bf6BCA138",
+      "chain_id": 8453,
+      "role": "router",
+      "label": "swap router used for quotes",
+      "provenance": "rpc_derived",
+      "provenance_detail": null,
+      "runtime_status": "contract",
+      "code_hash": "0x3e8d429d88918f02d0cb52eb21a3d3a423cbc157296600d7369eeee3e5fcb59c",
+      "pin_id": "P1",
+      "material": false,
+      "limitation_id": null
+    },
+    {
+      "address": "0x685d2674408B5D7f076C2571D8a1A0a38D23F707",
+      "chain_id": 8453,
+      "role": "quoter",
+      "label": "quoter used for read-only quotes",
+      "provenance": "rpc_derived",
+      "provenance_detail": null,
+      "runtime_status": "contract",
+      "code_hash": "0xef819e35c3930921088b018164c81c04fd35d961a21cea2fe13880ba4c44e70e",
+      "pin_id": "P1",
+      "material": false,
+      "limitation_id": null
+    },
+    {
+      "address": "0x1199C89A03c654B7Db592ad9a124E0D7b4AdDc0d",
+      "chain_id": 8453,
+      "role": "treasury",
+      "label": "feeRecipient() at P1",
+      "provenance": "rpc_derived",
+      "provenance_detail": "E13",
+      "runtime_status": "eoa",
+      "code_hash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470",
+      "pin_id": "P1",
+      "material": true,
+      "limitation_id": null
+    },
+    {
+      "address": "0xbb81ec74428A54fAEd3b863AAfcbE883f6b4f01a",
+      "chain_id": 8453,
+      "role": "deployer",
+      "label": "deployment tx sender",
+      "provenance": "rpc_derived",
+      "provenance_detail": null,
+      "runtime_status": "eoa",
+      "code_hash": null,
+      "pin_id": "P1",
+      "material": false,
+      "limitation_id": null
+    },
+    {
+      "address": "0x2Ce211cff7652aDE6381Dba7e5C621E1ef0B7183",
+      "chain_id": 8453,
+      "role": "holder",
+      "label": "largest non-pool holder at P1",
+      "provenance": "rpc_derived",
+      "provenance_detail": null,
+      "runtime_status": "eoa",
+      "code_hash": null,
+      "pin_id": "P1",
+      "material": false,
+      "limitation_id": null
+    }
+  ],
+  "declarations": {
+    "no_real_signing": true,
+    "no_broadcast": true,
+    "no_private_keys_requested": true,
+    "external_content_untrusted": true,
+    "simulation": {
+      "used": true,
+      "fork_type": "anvil",
+      "fork_verified_disposable": false,
+      "fork_attestation_path": null,
+      "fork_chain_id": 8453,
+      "fork_block": 20000000,
+      "synthetic_accounts_only": true,
+      "results_labeled_counterfactual": true
+    }
+  },
+  "coverage": {
+    "limitations": [
+      {
+        "limitation_id": "L1",
+        "kind": "rpc_pruned",
+        "description": "eth_getTransactionReceipt for blocks before the RPC pruning horizon returned 'missing trie node'; historical sells could not be verified at receipt level.",
+        "affected_check_ids": [
+          "C-HIST-SELL"
+        ],
+        "affected_addresses": [],
+        "retry_attempts": 3
+      }
+    ],
+    "notes": "This is a coverage limitation of the queried endpoint, not a token finding."
+  },
+  "discovery": [
+    {
+      "discovery_id": "S1",
+      "claim": "No side pool for the token was found besides the canonical pool.",
+      "search_universe": "PoolCreated logs of the v3 factory and PairCreated logs of the v2 factory recorded in E9",
+      "block_range": "19000000-20000000",
+      "pagination": "eth_getLogs in 50000-block windows",
+      "inclusion_rule": "either token of the pair equals the target address",
+      "exclusions": null,
+      "materiality_threshold": "none for discovery",
+      "coverage": "full for the two factories searched; other DEX factories not searched"
+    }
+  ],
+  "checks": [
+    {
+      "check_id": "A-MINT",
+      "surface": "token_controls",
+      "name": "Mint / supply-increase authority",
+      "status": "finding",
+      "severity": "high",
+      "evidence_ids": [
+        "E2",
+        "E3",
+        "E5"
+      ],
+      "finding_ids": [
+        "F1"
+      ],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-UPGRADE",
+      "surface": "token_controls",
+      "name": "Upgrade authority",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2",
+        "E4"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-SEIZE",
+      "surface": "token_controls",
+      "name": "Seizure / forced transfer / balance rewrite",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2",
+        "E5"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-RESTRICT",
+      "surface": "token_controls",
+      "name": "Pause / blacklist / limits / trading gates",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2",
+        "E5"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-TAX",
+      "surface": "token_controls",
+      "name": "Transfer taxes and exemptions",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2",
+        "E5"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-EXTCALL",
+      "surface": "token_controls",
+      "name": "External calls / delegatecall from token",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "A-ADMIN",
+      "surface": "token_controls",
+      "name": "Current owner / roles / timelock",
+      "status": "finding",
+      "severity": "medium",
+      "evidence_ids": [
+        "E3"
+      ],
+      "finding_ids": [
+        "F3"
+      ],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "B-CANON",
+      "surface": "canonical_lp_principal_custody",
+      "name": "Canonical pool identified by exact address",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E6",
+        "E9"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "B-PRINCIPAL",
+      "surface": "canonical_lp_principal_custody",
+      "name": "Executable LP-principal removal path",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E7",
+        "E8"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "B-SIDE",
+      "surface": "side_pool_removal_risk",
+      "name": "Side pools discovered and inventoried",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E9"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "C-HIST-SELL",
+      "surface": "sellability_exit_depth",
+      "name": "Successful historical sell (receipt-level)",
+      "status": "unknown",
+      "severity": null,
+      "evidence_ids": [],
+      "finding_ids": [],
+      "reason": "Unknown because historical state was unavailable: receipts before the pruning horizon could not be fetched (L1).",
+      "pin_id": null,
+      "limitation_id": "L1"
+    },
+    {
+      "check_id": "C-QUOTE",
+      "surface": "sellability_exit_depth",
+      "name": "Pinned read-only quotes at small and holder-sized amounts",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E10",
+        "E16"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "D-SUPPLY",
+      "surface": "current_concentration",
+      "name": "Supply reconciliation",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E11"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "D-CONC",
+      "surface": "current_concentration",
+      "name": "Classified concentration",
+      "status": "finding",
+      "severity": "medium",
+      "evidence_ids": [
+        "E11"
+      ],
+      "finding_ids": [
+        "F2"
+      ],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "E-LAUNCH",
+      "surface": "historical_launch_integrity",
+      "name": "Launch parameters and early transfers decoded",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E12"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P2",
+      "limitation_id": null
+    },
+    {
+      "check_id": "F-FEES",
+      "surface": "admin_treasury_reward_custody",
+      "name": "Fee basis, splits, claim authority, recipients",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E13"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "F-TREASURY",
+      "surface": "admin_treasury_reward_custody",
+      "name": "Treasury / fee-wallet reconciliation",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E13"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "G-REWARDS",
+      "surface": "reward_accounting_liveness",
+      "name": "Rewards / vault / backing accounting",
+      "status": "not_applicable",
+      "severity": null,
+      "evidence_ids": [],
+      "finding_ids": [],
+      "reason": "No reward distributor, vault or backing contract is in scope; none was discovered in E9 or E14.",
+      "pin_id": null,
+      "limitation_id": null
+    },
+    {
+      "check_id": "G-RIGHTS",
+      "surface": "utility_redemption_rights",
+      "name": "Enforceable holder rights",
+      "status": "not_applicable",
+      "severity": null,
+      "evidence_ids": [],
+      "finding_ids": [],
+      "reason": "No redemption or claim right is advertised (E14) or present in the runtime (E2).",
+      "pin_id": null,
+      "limitation_id": null
+    },
+    {
+      "check_id": "H-UTILITY",
+      "surface": "utility_redemption_rights",
+      "name": "Advertised utility live, token-linked, enforceable",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E14",
+        "E2"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "H-DEPS",
+      "surface": "external_dependencies",
+      "name": "Oracles, bridges, keepers, APIs, collateral dependencies",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E2",
+        "E14"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    },
+    {
+      "check_id": "H-DEV",
+      "surface": "development_disclosure",
+      "name": "Source correspondence, builds, tests, disclosure",
+      "status": "pass",
+      "severity": null,
+      "evidence_ids": [
+        "E5",
+        "E15"
+      ],
+      "finding_ids": [],
+      "reason": null,
+      "pin_id": "P1",
+      "limitation_id": null
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "E1",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E1.json",
+      "artifact_sha256": "e37e95e5501f5a590a00770a436360258b47678ca8da5f6dfb6ab643e1c39c01",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "name()",
+          "symbol()",
+          "decimals()",
+          "totalSupply()"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "ABI string / uint8 / uint256 decode",
+      "summary": "name, symbol, decimals, totalSupply resolved at P1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E2",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "bytecode",
+      "artifact": "evidence/E2.json",
+      "artifact_sha256": "603beb93ebbba75d7dc906ca51f4f7d97625808b1e3a9019e63483121ad6b08b",
+      "query": {
+        "method": "eth_getCode",
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "PUSH4 selector walk + opcode scan (scripts/selector_scan.py)",
+      "summary": "runtime selectors include mint(address,uint256); no DELEGATECALL/SELFDESTRUCT; no pause/blacklist selectors",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E3",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E3.json",
+      "artifact_sha256": "06d402acb9c8a53b5fde92bdbbfda40267ee72617597f6828ef75f15009fc33b",
+      "query": {
+        "method": "eth_call",
+        "data": "0x8da5cb5b",
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "address decode of owner() return",
+      "summary": "owner() returns an externally owned account at P1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E4",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_storage",
+      "artifact": "evidence/E4.json",
+      "artifact_sha256": "3d73286fb6897ce82f6b94032a5ebda46a2230255a5a08edd668155a938a9d8b",
+      "query": {
+        "method": "eth_getStorageAt",
+        "slots": [
+          "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+          "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103",
+          "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "raw",
+      "summary": "EIP-1967 implementation/admin/beacon slots are zero at P1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E5",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "source_verified",
+      "artifact": "evidence/E5.json",
+      "artifact_sha256": "c69097a071a73286379ed9e2ccc64a592706fe45eab35a7bd70aa30e5c012b11",
+      "query": {
+        "method": "compile-and-compare",
+        "compiler": "solc (version recorded in artifact)"
+      },
+      "decoding_basis": "compiled runtime bytes equal eth_getCode bytes except metadata hash",
+      "summary": "verified source corresponds to deployed runtime; mint is onlyOwner with no cap",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E6",
+      "chain_id": 8453,
+      "address": "0x1345BD9a6C8A034Ed78BaFF7732fF6C315354D00",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E6.json",
+      "artifact_sha256": "46baa487339f7fa64e5701b7f35e9da6d118185eaed443ff3e200839cb76ac9c",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "slot0()",
+          "liquidity()",
+          "token0()",
+          "token1()",
+          "fee()"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "v3 pool ABI",
+      "summary": "canonical pool identified by exact address; token is token0; fee tier read at P1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E7",
+      "chain_id": 8453,
+      "address": "0xA7D2bCB329bF01DC85092FE1cc9cA6BC871e7847",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E7.json",
+      "artifact_sha256": "577747a700ae65baeb2f8aedd23fcde4354b7f500e27e425645b39ef19bdb758",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "positions(tokenId)",
+          "ownerOf(tokenId)",
+          "getApproved(tokenId)"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "v3 NonfungiblePositionManager ABI",
+      "summary": "position NFT owned by the locker; no approvals or operators at P1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E8",
+      "chain_id": 8453,
+      "address": "0x0063c7FCC46d3436e831664c35F79EA0787FD851",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E8.json",
+      "artifact_sha256": "c12f807c5c9019e3e62b6fe7028074897d5ae16a17a4efeee010c27835f9e332",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "locks(tokenId)",
+          "owner()"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "locker ABI from verified source",
+      "summary": "lock record for the position: unlock time after the 30-day horizon; no early-withdraw selector in runtime",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E9",
+      "chain_id": 8453,
+      "address": "0x1345BD9a6C8A034Ed78BaFF7732fF6C315354D00",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "log_decoded",
+      "artifact": "evidence/E9.json",
+      "artifact_sha256": "9605f3e555c22c03ded71595b57cb4e7e77e88332411e7dc7b5bb66a0298ec0c",
+      "query": {
+        "method": "eth_getLogs",
+        "topics": [
+          "PoolCreated(address,address,uint24,int24,address)",
+          "PairCreated(address,address,address,uint256)"
+        ],
+        "fromBlock": "0x121eac0",
+        "toBlock": "0x1312d00"
+      },
+      "decoding_basis": "event signatures of the v3 and v2 factories",
+      "summary": "one PoolCreated for the token; no PairCreated; search universe declared in S1",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E10",
+      "chain_id": 8453,
+      "address": "0x685d2674408B5D7f076C2571D8a1A0a38D23F707",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E10.json",
+      "artifact_sha256": "799377d824d034e05d88585861b4ff7fbe76b4911af8492db13a8f3be013633d",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "quoteExactInputSingle (small, holder-sized)"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "quoter ABI",
+      "summary": "read-only quotes at 0.01% and 2% of supply; per-unit degradation recorded; quotes do not prove a realized exit",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E11",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E11.json",
+      "artifact_sha256": "a18993680dd64dee8cba3bb7c76ddd8a3cd436746d23d93f9e3fecfccb23e75a",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "balanceOf(pool)",
+          "balanceOf(locker)",
+          "balanceOf(treasury)",
+          "balanceOf(holder1)",
+          "totalSupply()"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "uint256 decode",
+      "summary": "pool, treasury and top holder balances reconcile to totalSupply within the declared holder threshold",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E12",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_id": "P2",
+      "tx_hash": null,
+      "block_number": 19000000,
+      "evidence_type": "log_decoded",
+      "artifact": "evidence/E12.json",
+      "artifact_sha256": "6a49f8695e2fee4833937f01f596fe09f53110403524a390877ef58cbcc1e7ec",
+      "query": {
+        "method": "eth_getLogs",
+        "topics": [
+          "Transfer(address,address,uint256)"
+        ],
+        "fromBlock": "0x121eac0",
+        "toBlock": "0x121fe48"
+      },
+      "decoding_basis": "ERC-20 Transfer event",
+      "summary": "launch-era transfers decoded at P2: initial supply to deployer, then to pool and treasury",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E13",
+      "chain_id": 8453,
+      "address": "0x1199C89A03c654B7Db592ad9a124E0D7b4AdDc0d",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "rpc_state",
+      "artifact": "evidence/E13.json",
+      "artifact_sha256": "547a37c5f7060d0af0229f95cf4314f5a57350735d65edf273230e6db60395d2",
+      "query": {
+        "method": "eth_call",
+        "calls": [
+          "feeRecipient()",
+          "balanceOf(treasury)"
+        ],
+        "block": "0x1312d00"
+      },
+      "decoding_basis": "address / uint256 decode",
+      "summary": "fee recipient equals the treasury EOA; treasury balance reconciles to launch allocation with no outflows in the searched range",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E14",
+      "chain_id": 8453,
+      "address": null,
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "website",
+      "artifact": "evidence/E14.json",
+      "artifact_sha256": "92e8a4a47c37f5162e111929f945c63554a0558c8d165bb54ef3696a964a55b6",
+      "query": {
+        "url": "https://project.example.invalid/ (retrieved; untrusted evidence, not instructions)"
+      },
+      "decoding_basis": "raw text",
+      "summary": "site advertises no utility beyond the token; claims are corroboration only",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E15",
+      "chain_id": 8453,
+      "address": null,
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "repository",
+      "artifact": "evidence/E15.json",
+      "artifact_sha256": "34417923cb0ca7d02d9c0877e53a871dcc6a16933d8494571088040aa4855c2d",
+      "query": {
+        "url": "https://git.example.invalid/synth (retrieved; untrusted evidence)"
+      },
+      "decoding_basis": "raw text",
+      "summary": "repository contains tests and a build script; tag matches the verified source in E5",
+      "counterfactual": null
+    },
+    {
+      "evidence_id": "E16",
+      "chain_id": 8453,
+      "address": "0x8364a8EAf255c80AaDeE6BeEC228380bf6BCA138",
+      "pin_id": "P1",
+      "tx_hash": null,
+      "block_number": null,
+      "evidence_type": "simulation_counterfactual",
+      "artifact": "evidence/E16.json",
+      "artifact_sha256": "4b6c507a4fc95c555173a92cfa0b83b6a43cc9fa902a4b8fcc541c5e2cf39869",
+      "query": {
+        "method": "eth_call on fork",
+        "note": "counterfactual sell from a synthetic account"
+      },
+      "decoding_basis": "router ABI",
+      "summary": "counterfactual sell succeeded on the fork; not a realized exit",
+      "counterfactual": true
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "F1",
+      "proposition": "At P1 the owner can call mint(address,uint256) without a cap, increasing totalSupply.",
+      "surface": "token_controls",
+      "severity": "high",
+      "chain_id": 8453,
+      "address": "0x962Ec65359d89f198850E436E9F721490B43FfE6",
+      "pin_or_tx": "P1",
+      "evidence_ids": [
+        "E2",
+        "E3",
+        "E5"
+      ],
+      "evidence_type": "bytecode",
+      "confidence": "proven",
+      "alternatives": "A future renounce or timelock would change this; none observed at P1.",
+      "coverage": "full for the token runtime",
+      "stale_conditions": "owner() changes, ownership renounced, or runtime replaced",
+      "is_historical": false
+    },
+    {
+      "finding_id": "F2",
+      "proposition": "At P1 the largest non-pool holder holds about 18% of totalSupply (denominator: totalSupply; pool and locker excluded).",
+      "surface": "current_concentration",
+      "severity": "medium",
+      "chain_id": 8453,
+      "address": "0x2Ce211cff7652aDE6381Dba7e5C621E1ef0B7183",
+      "pin_or_tx": "P1",
+      "evidence_ids": [
+        "E11"
+      ],
+      "evidence_type": "rpc_state",
+      "confidence": "proven",
+      "alternatives": "The holder may be a custody address; no label evidence was found.",
+      "coverage": "top holders above the 0.5% threshold",
+      "stale_conditions": "any transfer from or to the holder",
+      "is_historical": false
+    },
+    {
+      "finding_id": "F3",
+      "proposition": "At P1 the owner is an externally owned account with no timelock or multisig between it and the mint authority.",
+      "surface": "token_controls",
+      "severity": "medium",
+      "chain_id": 8453,
+      "address": "0xc321C6851A7095A8095F0b2D7cE6FD919986BE5d",
+      "pin_or_tx": "P1",
+      "evidence_ids": [
+        "E3"
+      ],
+      "evidence_type": "rpc_state",
+      "confidence": "proven",
+      "alternatives": "The key could be held by a hardware or MPC custody arrangement; not observable onchain.",
+      "coverage": "full",
+      "stale_conditions": "ownership transferred to a contract",
+      "is_historical": false
+    }
+  ],
+  "ratings": {
+    "token_controls": {
+      "rating": "high",
+      "likelihood": "medium",
+      "confidence": "high",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "A-MINT",
+        "A-UPGRADE",
+        "A-SEIZE",
+        "A-RESTRICT",
+        "A-TAX",
+        "A-EXTCALL",
+        "A-ADMIN"
+      ],
+      "summary": "Uncapped owner mint at P1 (F1) from an EOA owner (F3); no upgrade, seizure, restriction or tax path found in the runtime.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "canonical_lp_principal_custody": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "high",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "B-CANON",
+        "B-PRINCIPAL"
+      ],
+      "summary": "No current executable removal path found at the pinned block for the canonical position (held by the locker, unlock after horizon).",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "side_pool_removal_risk": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "medium",
+      "coverage": "partial",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "B-SIDE"
+      ],
+      "summary": "No side pool found in the searched factories (S1); other factories were not searched.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "sellability_exit_depth": {
+      "rating": "unknown",
+      "likelihood": "unknown",
+      "confidence": "low",
+      "coverage": "partial",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "C-HIST-SELL",
+        "C-QUOTE"
+      ],
+      "summary": "Quotes at the tested sizes were obtained under the quoted state; no historical sell could be verified at receipt level (L1).",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "current_concentration": {
+      "rating": "medium",
+      "likelihood": "medium",
+      "confidence": "high",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "D-SUPPLY",
+        "D-CONC"
+      ],
+      "summary": "Supply reconciles; one holder near 18% of supply (F2).",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "historical_launch_integrity": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "medium",
+      "coverage": "partial",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "E-LAUNCH"
+      ],
+      "summary": "Launch-era transfers decoded at P2 match the declared allocation; sales in the launch window were not traced beyond transfers.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "admin_treasury_reward_custody": {
+      "rating": "medium",
+      "likelihood": "medium",
+      "confidence": "high",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "F-FEES",
+        "F-TREASURY",
+        "A-ADMIN"
+      ],
+      "summary": "Fees route to an EOA treasury controlled by the same owner key.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "reward_accounting_liveness": {
+      "rating": "not_applicable",
+      "likelihood": "unknown",
+      "confidence": "high",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "G-REWARDS"
+      ],
+      "summary": "No reward layer in scope.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "utility_redemption_rights": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "medium",
+      "coverage": "full",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "G-RIGHTS",
+        "H-UTILITY"
+      ],
+      "summary": "No utility or redemption right is advertised or enforceable; nothing to lose beyond market value.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "external_dependencies": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "medium",
+      "coverage": "partial",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "H-DEPS"
+      ],
+      "summary": "No oracle, bridge or keeper dependency found in the runtime or on the site.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    },
+    "development_disclosure": {
+      "rating": "low",
+      "likelihood": "low",
+      "confidence": "medium",
+      "coverage": "partial",
+      "time_basis_pin_id": "P1",
+      "basis_check_ids": [
+        "H-DEV"
+      ],
+      "summary": "Verified source corresponds to the runtime; repository has tests; audit scope not disclosed.",
+      "coverage_qualified": false,
+      "coverage_note": null
+    }
+  },
+  "verdict": {
+    "question": "Under a rug-resistance requirement for a 30-day hold, is this token acceptable?",
+    "requirement_frame": "rug resistance for a 30-day hold",
+    "answer": "NO-GO under the stated requirement for rug resistance: at the pinned block the owner key can mint without a cap (F1), so supply and price can be changed unilaterally even though no current executable LP-removal path was found.",
+    "conditional": true,
+    "conditions": [
+      "Would become GO-WITH-CONDITIONS if mint authority is renounced or placed behind a timelock and re-verified at a new pin."
+    ],
+    "main_reasons": [
+      "F1 uncapped mint by an EOA owner",
+      "F3 no timelock or multisig"
+    ],
+    "strongest_contrary_evidence": [
+      "Canonical position locked past the horizon (E7, E8)",
+      "No side pools in the searched universe (E9, S1)"
+    ],
+    "unresolved_questions": [
+      "Whether any historical sell succeeded at receipt level (L1)",
+      "Whether the 18% holder is a custody address (F2)"
+    ],
+    "evidence_that_would_change_it": [
+      "A pinned owner() of the zero address or a timelock contract",
+      "A receipt-level historical sell"
+    ]
+  },
+  "report": {
+    "path": "report.md",
+    "sha256": "8a39aa6a2008a79e6cfec129460748f3343bfe07f5ad03319337d527e6375cf8",
+    "format": "markdown"
+  }
+}
