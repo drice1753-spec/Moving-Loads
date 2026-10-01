@@ -17,13 +17,22 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
+llm = [
+    "anthropic>=1.0",
+]
+
+[project.scripts]
+offerings = "email_offerings.cli:main"
+
+[tool.setuptools]
+packages = ["moving_loads", "email_offerings"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v"
 
 [tool.coverage.run]
-source = ["moving_loads"]
+source = ["moving_loads", "email_offerings"]
 
 [tool.coverage.report]
 show_missing = true
