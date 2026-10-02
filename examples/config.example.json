@@ -1,0 +1,47 @@
+{
+  "_note": "Copy to config.json (outside git) and edit. Any key here can be overridden by an OFFERINGS_<FIELD> environment variable, and environment variables always win. Leave the four secret fields empty and set OFFERINGS_GMAIL_CLIENT_ID, OFFERINGS_GMAIL_CLIENT_SECRET, OFFERINGS_GMAIL_REFRESH_TOKEN, OFFERINGS_GOOGLE_MAPS_API_KEY and OFFERINGS_ANTHROPIC_API_KEY in the environment instead. Keys starting with an underscore are ignored.",
+
+  "sender_email": "you@example.com",
+  "sender_name": "Alex Rivera",
+  "company_name": "Alpinewest Resources",
+  "reply_to": "",
+  "escalation_email": "you@example.com",
+  "sales_team_email": "sales-team@example.com",
+  "signature": "-Alex\nAlpinewest Resources\n(555) 010-0100",
+
+  "google_maps_api_key": "",
+  "rate_per_mile": 4.5,
+  "freight_margin_per_truckload": 0.0,
+
+  "anthropic_api_key": "",
+  "anthropic_model": "claude-opus-5-5",
+  "classifier": "auto",
+
+  "gmail_client_id": "",
+  "gmail_client_secret": "",
+  "gmail_refresh_token": "",
+  "gmail_label_prefix": "Offerings",
+
+  "db_path": "offerings.db",
+  "outbox_dir": "outbox",
+  "timezone": "US/Eastern",
+
+  "policy": {
+    "_note": "Safe testing defaults. allowed_recipient_domains is set to example.com so nothing can reach a real buyer until you clear it (use [] for any domain). Flip live with OFFERINGS_POLICY_LIVE=true or the --live flag once the dry run looks right.",
+    "live": false,
+    "auto_reply_mode": "draft",
+    "auto_send_follow_ups": false,
+    "acknowledge_offers": false,
+    "max_sends_per_run": 200,
+    "max_sends_per_day": 1500,
+    "bcc_chunk_size": 50,
+    "follow_up_after_days": 3,
+    "max_follow_ups": 1,
+    "quiet_hours_start": 20,
+    "quiet_hours_end": 7,
+    "allowed_recipient_domains": ["example.com"],
+    "unsubscribe_footer": true,
+    "inbox_lookback_days": 7,
+    "offering_ttl_days": 30
+  }
+}

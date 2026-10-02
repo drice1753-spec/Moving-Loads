@@ -1,0 +1,6 @@
+email,name,company,postal_code,city_state,tags
+buyer-one@example.com,Marcus Thibodeaux,Thibodeaux Flooring Outlet,73127,"Oklahoma City, OK",flooring|liquidator
+buyer-two@example.com,Priya Venkataraman,Lone Star Surplus Supply,75247,"Dallas, TX",flooring|tile|surplus
+buyer-three@example.com,Kevin Okafor,Metro North ReStore,30318,"Atlanta, GA",restore|flooring|vanities
+purchasing@example.com,,Great Lakes Liquidators,44113,"Cleveland, OH",liquidator|pavers|lumber
+buyer-five@example.com,Dana Whitfield,Blue Ridge Carpet & Tile,28801,"Asheville, NC",carpet-tile|tile

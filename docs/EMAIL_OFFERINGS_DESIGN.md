@@ -16,7 +16,7 @@ Habitat ReStores). Today the owner does this by hand in Gmail:
 |------|------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
 | 1    | Writes an **internal cost sheet** to the sales team: `DELETE RED...FOB: Calhoun, GA...COST FOB: $0.99/sf...Suggested Sell Below...BRING BACK ALL FIRM OFFERS...DELETE RED.` Subject ends in `(AWR 10/1)`. | `parsers.parse_internal_sheet` turns it into an `Offering`; `templates.render_internal_sheet` can produce it. |
 | 2    | **Blasts** the customer version: To: himself, Bcc: ~300 buyers. Subject like `$0.99/sf Silver Rustic Oak SPC Vinyl Click Flooring (New 10/1)` or `MAKE OFFERS: 5mm/12mil Silver Rustic Oak SPC ... (New 10/1)`. Re-sends as `... - 10/1 update`. | `Engine.schedule_blast` + `Engine.dispatch_campaigns` (Bcc chunks of `Policy.bcc_chunk_size`). |
-| 3    | **Personal forwards** to one buyer: subject `RUSSELL>>$0.99/sf delv. 6mm/20mil 7x48 SPC Vinyl Click (NEW TRUCK)`, one-line note ("I can deliver this truckload at $0.99/sf. Pretty great deal. -Dan"). | `CampaignKind.PERSONAL` with `personal_note`. |
+| 3    | **Personal forwards** to one buyer: subject `JORDAN>>$0.99/sf delv. 6mm/20mil 7x48 SPC Vinyl Click (NEW TRUCK)`, one-line note ("I can deliver this truckload at $0.99/sf. Pretty great deal. -Sam"). | `CampaignKind.PERSONAL` with `personal_note`. |
 | 4    | Buyers reply: *"How cheap can you get on 2 truckloads delivered to 73127?"* Owner answers: *"freight is $2900 from Calhoun, GA to Oklahoma City, OK... make a firm offer delivered to your location."* | `classify` → `DELIVERED_PRICE_REQUEST`; `pricing.quote_delivered` uses `moving_loads.freight_calculator`; `templates.render_delivered_quote_reply`; sent or drafted per `Policy.auto_reply_mode`. |
 | 5    | Buyers make **firm offers**; owner negotiates.                                                                   | `FIRM_OFFER` → **escalated** to `Settings.escalation_email`, thread labelled; never accepted automatically. |
 | 6    | Out-of-office auto-replies, bounces, "take me off your list".                                                    | Ignored / buyer bounced / buyer unsubscribed. Never answered. |
@@ -129,7 +129,7 @@ def format_price(price: float, unit: Unit) -> str          # "$0.99/sf", "$8,500
 def short_date(when: datetime | date) -> str              # "10/1" (no zero padding)
 def blast_subject(offering: Offering, when: datetime, *, update: bool = False) -> str
     # make_offers → "MAKE OFFERS: {title} (New 10/1)"  else "{price} {title} (New 10/1)"; update → "... - 10/1 update"
-def personal_subject(buyer: Buyer, offering: Offering) -> str   # "RUSSELL>>{price} {title}"; no name → blast_subject without date suffix
+def personal_subject(buyer: Buyer, offering: Offering) -> str   # "JORDAN>>{price} {title}"; no name → blast_subject without date suffix
 def internal_subject(offering: Offering, when: datetime) -> str # "{price} {title} (AWR 10/1)" using cost_price if set else sell_price
 def strip_internal_markup(text: str) -> str
     # remove every "DELETE RED ... DELETE RED" span (case-insensitive, may span lines, '.' optional after), lines containing "COST FOB", "Suggested Sell"
